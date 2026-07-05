@@ -1,0 +1,58 @@
+import { Link, Route, Routes } from 'react-router'
+import Budget from './pages/Budget'
+import Comptes from './pages/Comptes'
+import Import from './pages/Import'
+import ModifierTransaction from './pages/ModifierTransaction'
+import NouvelleTransaction from './pages/NouvelleTransaction'
+import Transactions from './pages/Transactions'
+
+function Accueil() {
+  return (
+    <main className="flex min-h-[calc(100svh-57px)] flex-col items-center justify-center px-4 text-center sm:px-4 lg:px-7">
+      <h1 className="text-page-title font-bold text-ink">Bienvenue sur GestionDuBudget</h1>
+      <p className="mt-2 max-w-sm text-body text-ink-muted">
+        Le cockpit financier du foyer. L'application est opérationnelle.
+      </p>
+    </main>
+  )
+}
+
+function App() {
+  return (
+    <div className="min-h-screen bg-surface">
+      <header className="flex items-center justify-between border-b border-border px-4 py-4 sm:px-4 lg:px-7">
+        <span className="text-brand-mark font-bold tracking-[0.3px] text-ink">
+          GestionDuBudget
+        </span>
+        <nav className="flex items-center gap-4">
+          <Link to="/comptes" className="text-body text-ink-muted hover:text-ink">
+            Comptes
+          </Link>
+          <Link to="/transactions" className="text-body text-ink-muted hover:text-ink">
+            Transactions
+          </Link>
+          <Link to="/budget" className="text-body text-ink-muted hover:text-ink">
+            Budget
+          </Link>
+          <Link
+            to="/transactions/nouvelle"
+            className="rounded-lg bg-accent px-3 py-1.5 text-body-strong text-surface"
+          >
+            + Transaction
+          </Link>
+        </nav>
+      </header>
+      <Routes>
+        <Route path="/" element={<Accueil />} />
+        <Route path="/comptes" element={<Comptes />} />
+        <Route path="/transactions" element={<Transactions />} />
+        <Route path="/transactions/import" element={<Import />} />
+        <Route path="/transactions/nouvelle" element={<NouvelleTransaction />} />
+        <Route path="/transactions/:id/modifier" element={<ModifierTransaction />} />
+        <Route path="/budget" element={<Budget />} />
+      </Routes>
+    </div>
+  )
+}
+
+export default App

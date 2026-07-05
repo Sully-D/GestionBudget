@@ -1,0 +1,7 @@
+fastapi==0.138.2
+uvicorn[standard]==0.38.0
+sqlalchemy==2.0.51
+alembic==1.18.5
+pydantic-settings==2.14.2
+ofxtools==0.9.5
+python-multipart==0.0.32

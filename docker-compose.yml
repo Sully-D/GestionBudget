@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-8082}:${PORT:-8082}"
+    environment:
+      PORT: "${PORT:-8082}"
+      DATABASE_PATH: "${DATABASE_PATH:-/data/gestion_budget.db}"
+    volumes:
+      - gestion_budget_data:/data
+
+volumes:
+  gestion_budget_data:

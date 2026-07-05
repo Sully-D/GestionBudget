@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+backend/.venv
+backend/*.db
+**/.env
+_bmad
+_bmad-output
+docs
+.git
+.claude
+.opencode
+.agents
