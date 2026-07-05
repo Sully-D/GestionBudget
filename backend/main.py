@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from app.accounts.router import router as accounts_router
 from app.budget.router import router as budget_router
 from app.budget.targets_router import router as budget_targets_router
+from app.budget.tracking_router import router as budget_tracking_router
 from app.core.config import settings
 from app.import_pipeline.router import router as import_router
 from app.tags.router import router as tags_router
@@ -36,6 +37,7 @@ app.include_router(tags_router)
 app.include_router(rules_router)
 app.include_router(budget_router)
 app.include_router(budget_targets_router)
+app.include_router(budget_tracking_router)
 app.include_router(import_router)
 
 app.frontend("/", directory=settings.frontend_dist_dir, fallback="index.html")

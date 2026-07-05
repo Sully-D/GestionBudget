@@ -74,3 +74,25 @@ class BudgetTargetRead(BaseModel):
     @field_serializer("percentage", when_used="json")
     def _serialize_percentage(self, value: Decimal) -> float:
         return float(value)
+
+
+class TagTrackingRead(BaseModel):
+    tag_id: int
+    tag_name: str
+    parent_id: int | None
+    level: int
+    spent: Decimal
+    target_percentage: Decimal | None
+    target_amount: Decimal | None
+    gap: Decimal | None
+    projection: Decimal | None
+
+    @field_serializer("spent", when_used="json")
+    def _serialize_spent(self, value: Decimal) -> float:
+        return float(value)
+
+    @field_serializer(
+        "target_percentage", "target_amount", "gap", "projection", when_used="json"
+    )
+    def _serialize_nullable_decimal(self, value: Decimal | None) -> float | None:
+        return float(value) if value is not None else None

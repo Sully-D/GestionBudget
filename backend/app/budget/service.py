@@ -1,10 +1,11 @@
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
+from app.accounts.service import compute_period
 from app.budget.model import BudgetTarget, Revenue
 from app.budget.schema import (
     BudgetTargetUpsert,
@@ -12,8 +13,11 @@ from app.budget.schema import (
     RevenuePeriodSummary,
     RevenueRead,
     RevenueSalaireUpsert,
+    TagTrackingRead,
 )
+from app.core.period import period_for
 from app.tags.model import Tag
+from app.transactions.model import Transaction, TransactionTag
 
 
 def _get_personal_account_or_404(account_id: int, db: Session) -> Account:
@@ -215,3 +219,106 @@ def delete_budget_target(target_id: int, db: Session) -> None:
         raise HTTPException(status_code=404, detail=f"Cible {target_id} introuvable")
     db.delete(target)
     db.commit()
+
+
+def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[TagTrackingRead]:
+    account = _get_personal_account_or_404(account_id, db)
+    today = date.today()
+    period_start, period_end = period_for(account.start_day, period_start)
+    is_current_period = period_start == compute_period(account, today)[0]
+
+    rows = (
+        db.query(TransactionTag.transaction_id, TransactionTag.tag_id, Transaction.amount)
+        .join(Transaction, Transaction.transaction_id == TransactionTag.transaction_id)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+            Transaction.amount < 0,
+        )
+        .all()
+    )
+    txn_tag_ids: dict[int, set[int]] = {}
+    txn_amount: dict[int, Decimal] = {}
+    for transaction_id, tag_id, amount in rows:
+        txn_tag_ids.setdefault(transaction_id, set()).add(tag_id)
+        txn_amount[transaction_id] = abs(amount)
+
+    tags = db.query(Tag).all()
+    tag_by_id = {tag.tag_id: tag for tag in tags}
+
+    # Auto-tagué ou remonté par un enfant, une même transaction ne doit compter
+    # qu'une fois par ancêtre (évite le double comptage si elle porte à la fois
+    # un tag et l'un de ses ancêtres/descendants).
+    ancestors_or_self: dict[int, list[int]] = {}
+    for tag in tags:
+        chain = []
+        current: Tag | None = tag
+        while current is not None:
+            chain.append(current.tag_id)
+            current = tag_by_id.get(current.parent_id) if current.parent_id is not None else None
+        ancestors_or_self[tag.tag_id] = chain
+
+    total_spent: dict[int, Decimal] = {tag.tag_id: Decimal("0.00") for tag in tags}
+    for transaction_id, tag_ids in txn_tag_ids.items():
+        amount = txn_amount[transaction_id]
+        affected_tag_ids: set[int] = set()
+        for tag_id in tag_ids:
+            affected_tag_ids.update(ancestors_or_self.get(tag_id, ()))
+        for tag_id in affected_tag_ids:
+            if tag_id in total_spent:
+                total_spent[tag_id] += amount
+
+    targets = db.query(BudgetTarget).filter(BudgetTarget.account_id == account_id).all()
+    target_by_tag = {
+        target.tag_id: target for target in targets if target.tag_id in tag_by_id
+    }
+
+    total_revenue = get_period_summary(account_id, period_start, db).total
+    jours_totaux = (period_end - period_start).days + 1
+    jours_ecoules = (today - period_start).days + 1
+
+    included_tag_ids = {
+        tag_id for tag_id, spent in total_spent.items() if spent != 0
+    } | set(target_by_tag.keys())
+
+    result: list[TagTrackingRead] = []
+    for tag_id in sorted(included_tag_ids):
+        tag = tag_by_id[tag_id]
+        spent = total_spent.get(tag_id, Decimal("0.00"))
+        target = target_by_tag.get(tag_id)
+
+        target_percentage: Decimal | None = None
+        target_amount: Decimal | None = None
+        gap: Decimal | None = None
+        projection: Decimal | None = None
+
+        if target is not None:
+            target_percentage = target.percentage
+            target_amount = (target.percentage / Decimal(100) * total_revenue).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            gap = target_amount - spent
+            projection = (
+                ((spent / jours_ecoules) * jours_totaux).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                if is_current_period
+                else None
+            )
+
+        result.append(
+            TagTrackingRead(
+                tag_id=tag.tag_id,
+                tag_name=tag.name,
+                parent_id=tag.parent_id,
+                level=tag.level,
+                spent=spent,
+                target_percentage=target_percentage,
+                target_amount=target_amount,
+                gap=gap,
+                projection=projection,
+            )
+        )
+
+    return result
