@@ -5,6 +5,7 @@ from app.core.db import get_db
 from app.import_pipeline.csv_parser import ColumnMapping
 from app.import_pipeline.pipeline import import_csv, import_ofx, preview_csv
 from app.import_pipeline.schema import CsvImportResult, CsvPreviewResult, ImportResult
+from app.projections.rapprochement import propose_if_match
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -21,7 +22,9 @@ async def post_import_ofx(
     db: Session = Depends(get_db),
 ):
     raw = await file.read()
-    imported_count, duplicate_count = import_ofx(account_id, raw, db)
+    imported_count, duplicate_count, transaction_ids = import_ofx(account_id, raw, db)
+    for transaction_id in transaction_ids:
+        propose_if_match(transaction_id, db)
     return {
         "data": ImportResult(imported_count=imported_count, duplicate_count=duplicate_count)
     }
@@ -55,7 +58,9 @@ async def post_import_csv(
         libelle_column=libelle_column,
         tiers_column=tiers_column or None,
     )
-    imported_count, skipped_count = import_csv(account_id, raw, mapping, db)
+    imported_count, skipped_count, transaction_ids = import_csv(account_id, raw, mapping, db)
+    for transaction_id in transaction_ids:
+        propose_if_match(transaction_id, db)
     return {
         "data": CsvImportResult(imported_count=imported_count, skipped_count=skipped_count)
     }

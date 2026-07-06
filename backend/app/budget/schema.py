@@ -96,3 +96,25 @@ class TagTrackingRead(BaseModel):
     )
     def _serialize_nullable_decimal(self, value: Decimal | None) -> float | None:
         return float(value) if value is not None else None
+
+
+class DisponibleRead(BaseModel):
+    account_id: int
+    period_start: date
+    period_end: date
+    revenus: Decimal
+    charges_recurrentes: Decimal
+    depenses_planifiees: Decimal
+    depenses_courantes: Decimal
+    disponible: Decimal
+
+    @field_serializer(
+        "revenus",
+        "charges_recurrentes",
+        "depenses_planifiees",
+        "depenses_courantes",
+        "disponible",
+        when_used="json",
+    )
+    def _serialize_decimal(self, value: Decimal) -> float:
+        return float(value)

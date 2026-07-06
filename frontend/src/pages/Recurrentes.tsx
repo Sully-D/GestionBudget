@@ -2,14 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
 import {
+  confirmRapprochement,
   confirmRecurring,
   deleteRecurring,
+  getPendingRapprochements,
   getRecurringCandidates,
   getRecurringTransactions,
+  rejectRapprochement,
   rejectRecurring,
   updateRecurring,
 } from '../api/projections'
-import type { Periodicity, RecurringCandidate, RecurringTransaction } from '../api/projections'
+import type {
+  Periodicity,
+  RapprochementCandidate,
+  RecurringCandidate,
+  RecurringTransaction,
+} from '../api/projections'
 import { getTags } from '../api/tags'
 import type { Tag } from '../api/tags'
 import { formatMontant, tagBreadcrumb } from '../lib/format'
@@ -43,6 +51,10 @@ function Recurrentes() {
   const [confirmedList, setConfirmedList] = useState<RecurringTransaction[]>([])
   const [confirmedLoading, setConfirmedLoading] = useState(false)
   const [confirmedError, setConfirmedError] = useState<string | null>(null)
+
+  const [pendingRapprochements, setPendingRapprochements] = useState<RapprochementCandidate[]>([])
+  const [pendingRapprochementsLoading, setPendingRapprochementsLoading] = useState(false)
+  const [pendingRapprochementsError, setPendingRapprochementsError] = useState<string | null>(null)
 
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editAmount, setEditAmount] = useState('')
@@ -95,14 +107,30 @@ function Recurrentes() {
       .finally(() => setConfirmedLoading(false))
   }
 
+  function refetchPendingRapprochements(accountId: number) {
+    setPendingRapprochementsLoading(true)
+    return getPendingRapprochements(accountId)
+      .then((data) => {
+        setPendingRapprochements(data)
+        setPendingRapprochementsError(null)
+      })
+      .catch((err) => {
+        setPendingRapprochementsError(err instanceof Error ? err.message : 'Erreur inattendue')
+      })
+      .finally(() => setPendingRapprochementsLoading(false))
+  }
+
   useEffect(() => {
     if (selectedAccountId === null) {
       setCandidates([])
       setConfirmedList([])
+      setPendingRapprochements([])
+      setPendingRapprochementsError(null)
       return
     }
     refetchCandidates(selectedAccountId)
     refetchConfirmed(selectedAccountId)
+    refetchPendingRapprochements(selectedAccountId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccountId])
 
@@ -141,6 +169,31 @@ function Recurrentes() {
       return
     }
     await refetchCandidates(selectedAccountId)
+  }
+
+  async function handleConfirmRapprochement(match: RapprochementCandidate) {
+    if (selectedAccountId === null) return
+    try {
+      await confirmRapprochement(match.match_id)
+    } catch (err) {
+      setPendingRapprochementsError(err instanceof Error ? err.message : 'Erreur inattendue')
+      return
+    }
+    await Promise.all([
+      refetchPendingRapprochements(selectedAccountId),
+      refetchConfirmed(selectedAccountId),
+    ])
+  }
+
+  async function handleRejectRapprochement(match: RapprochementCandidate) {
+    if (selectedAccountId === null) return
+    try {
+      await rejectRapprochement(match.match_id)
+    } catch (err) {
+      setPendingRapprochementsError(err instanceof Error ? err.message : 'Erreur inattendue')
+      return
+    }
+    await refetchPendingRapprochements(selectedAccountId)
   }
 
   function startEdit(recurring: RecurringTransaction) {
@@ -273,6 +326,59 @@ function Recurrentes() {
                   className="text-body-strong text-alert"
                 >
                   Rejeter
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-6 overflow-hidden rounded border border-border">
+        <div className="border-b border-border bg-surface-panel px-4 py-3">
+          <span className="text-section-title font-bold uppercase tracking-wide text-ink-muted">
+            Rapprochements en attente
+          </span>
+        </div>
+        <div className="px-0 py-1">
+          {pendingRapprochementsError && (
+            <p className="px-4 py-3 text-body text-alert">{pendingRapprochementsError}</p>
+          )}
+          {pendingRapprochementsLoading && (
+            <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
+          )}
+          {!pendingRapprochementsLoading &&
+            !pendingRapprochementsError &&
+            pendingRapprochements.length === 0 && (
+              <p className="px-4 py-8 text-center text-body text-ink-muted">
+                Aucun Rapprochement en attente.
+              </p>
+            )}
+          {pendingRapprochements.map((match) => (
+            <div
+              key={match.match_id}
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-4 py-2"
+            >
+              <div>
+                <p className="text-body-strong text-ink">{match.transaction_label}</p>
+                <p className="text-caption text-ink-muted">
+                  {formatMontant(match.transaction_amount)} · {match.transaction_date} ·{' '}
+                  {match.recurring_label}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleConfirmRapprochement(match)}
+                  className="text-body-strong text-accent"
+                >
+                  Confirmer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRejectRapprochement(match)}
+                  className="text-body-strong text-alert"
+                >
+                  Ignorer
                 </button>
               </div>
             </div>

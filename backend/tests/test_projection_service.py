@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.accounts.model import Account
 from app.core.db import Base
-from app.projections.model import PlannedExpense, RecurringTransaction
+from app.projections.model import PlannedExpense, RecurringMatch, RecurringTransaction
 from app.projections.schema import PlannedExpenseSplitCreate
 from app.projections.service import create_planned_expense_split, get_projection
 from app.tags.model import Tag
@@ -234,6 +234,53 @@ def test_projection_tie_on_date_type_label_ordered_deterministically_by_id(db):
     tied_again = [i for i in items_again if i.type == "recurrente" and i.label == "Salle"]
     assert tied == tied_again
     assert first.recurring_id != second.recurring_id
+
+
+def test_transaction_with_pending_rapprochement_excluded_from_anchor(db):
+    account = _add_account(db)
+    tag = _add_tag(db)
+    recurring = _add_recurring(
+        db, account.account_id, tag.tag_id, "salle de sport", "Salle de sport",
+        Decimal("-50.00"), "mensuelle",
+    )
+    transaction = _add_transaction(
+        db, account.account_id, date.today() - timedelta(days=5), Decimal("-50.00"), "Salle de sport"
+    )
+    db.add(
+        RecurringMatch(
+            recurring_id=recurring.recurring_id,
+            transaction_id=transaction.transaction_id,
+            status="pending",
+        )
+    )
+    db.commit()
+
+    items = get_projection(account.account_id, 6, db)
+    assert items == []
+
+
+def test_transaction_with_confirmed_rapprochement_used_as_anchor(db):
+    account = _add_account(db)
+    tag = _add_tag(db)
+    recurring = _add_recurring(
+        db, account.account_id, tag.tag_id, "salle de sport", "Salle de sport",
+        Decimal("-50.00"), "mensuelle",
+    )
+    transaction = _add_transaction(
+        db, account.account_id, date.today() - timedelta(days=5), Decimal("-50.00"), "Salle de sport"
+    )
+    db.add(
+        RecurringMatch(
+            recurring_id=recurring.recurring_id,
+            transaction_id=transaction.transaction_id,
+            status="confirmed",
+        )
+    )
+    db.commit()
+
+    items = get_projection(account.account_id, 6, db)
+    recurring_items = [i for i in items if i.type == "recurrente"]
+    assert len(recurring_items) >= 1
 
 
 def test_split_series_fractions_in_horizon_appear_in_projection(db):

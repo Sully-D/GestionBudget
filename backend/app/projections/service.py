@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
 from app.core.period import add_months, period_for
-from app.projections.model import PlannedExpense, RecurringTransaction
+from app.projections.model import PlannedExpense, RecurringMatch, RecurringTransaction
 from app.projections.schema import (
     PlannedExpenseSimpleCreate,
     PlannedExpenseSplitCreate,
@@ -354,16 +354,32 @@ def _advance_recurring_date(current: date, periodicity: str) -> date:
     return add_months(current, RECURRING_PERIODICITY_MONTHS[periodicity])
 
 
-def _anchor_date_for_signature(account_id: int, signature: str, db: Session) -> date | None:
-    transactions = (
-        db.query(Transaction)
-        .filter(Transaction.account_id == account_id, Transaction.amount < 0)
-        .all()
+def _anchor_date_for_signature(
+    account_id: int,
+    signature: str,
+    db: Session,
+    exclude_transaction_id: int | None = None,
+) -> date | None:
+    query = db.query(Transaction).filter(
+        Transaction.account_id == account_id, Transaction.amount < 0
     )
+    if exclude_transaction_id is not None:
+        query = query.filter(Transaction.transaction_id != exclude_transaction_id)
+    transactions = query.all()
+    # Une Transaction avec un Rapprochement `pending` n'est pas encore décidée par
+    # l'utilisateur : elle ne doit pas faire avancer la Récurrente dans la Projection
+    # tant qu'elle n'est pas confirmée (AC #2/#3, Story 5.3).
+    pending_transaction_ids = {
+        row.transaction_id
+        for row in db.query(RecurringMatch.transaction_id)
+        .filter(RecurringMatch.status == "pending")
+        .all()
+    }
     matching_dates = [
         transaction.date
         for transaction in transactions
         if _signature_for_transaction(transaction) == signature
+        and transaction.transaction_id not in pending_transaction_ids
     ]
     if not matching_dates:
         return None

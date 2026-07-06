@@ -53,9 +53,12 @@ def default_mapping():
 
 
 def test_import_csv_inserts_valid_rows_and_counts_skipped(db, account, sample_csv_bytes, default_mapping):
-    imported_count, skipped_count = import_csv(account.account_id, sample_csv_bytes, default_mapping, db)
+    imported_count, skipped_count, transaction_ids = import_csv(
+        account.account_id, sample_csv_bytes, default_mapping, db
+    )
     assert imported_count == 3
     assert skipped_count == 1
+    assert len(transaction_ids) == 3
     assert db.query(Transaction).count() == 3
 
 
@@ -97,8 +100,8 @@ def test_import_csv_applies_matching_rule(db, account, sample_csv_bytes, default
 
 
 def test_import_csv_reimport_creates_duplicates_without_error(db, account, sample_csv_bytes, default_mapping):
-    imported_count_1, _ = import_csv(account.account_id, sample_csv_bytes, default_mapping, db)
-    imported_count_2, _ = import_csv(account.account_id, sample_csv_bytes, default_mapping, db)
+    imported_count_1, _, _ = import_csv(account.account_id, sample_csv_bytes, default_mapping, db)
+    imported_count_2, _, _ = import_csv(account.account_id, sample_csv_bytes, default_mapping, db)
     assert imported_count_1 == 3
     assert imported_count_2 == 3
     assert db.query(Transaction).count() == 6

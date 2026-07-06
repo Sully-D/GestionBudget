@@ -48,9 +48,12 @@ def duplicate_fitid_ofx_bytes():
 
 
 def test_import_on_empty_account_inserts_two_and_no_duplicates(db, account, sample_ofx_bytes):
-    imported_count, duplicate_count = import_ofx(account.account_id, sample_ofx_bytes, db)
+    imported_count, duplicate_count, transaction_ids = import_ofx(
+        account.account_id, sample_ofx_bytes, db
+    )
     assert imported_count == 2
     assert duplicate_count == 0
+    assert len(transaction_ids) == 2
     assert db.query(Transaction).count() == 2
 
 
@@ -60,9 +63,12 @@ def test_reimport_same_file_same_account_inserts_nothing_and_keeps_data(
     import_ofx(account.account_id, sample_ofx_bytes, db)
     ids_before = {t.transaction_id for t in db.query(Transaction).all()}
 
-    imported_count, duplicate_count = import_ofx(account.account_id, sample_ofx_bytes, db)
+    imported_count, duplicate_count, transaction_ids = import_ofx(
+        account.account_id, sample_ofx_bytes, db
+    )
     assert imported_count == 0
     assert duplicate_count == 2
+    assert transaction_ids == []
 
     ids_after = {t.transaction_id for t in db.query(Transaction).all()}
     assert ids_after == ids_before
@@ -106,11 +112,12 @@ def test_import_rolls_back_on_persist_error(db, account, sample_ofx_bytes, monke
 def test_import_deduplicates_two_rows_sharing_one_fitid_in_same_file(
     db, account, duplicate_fitid_ofx_bytes
 ):
-    imported_count, duplicate_count = import_ofx(
+    imported_count, duplicate_count, transaction_ids = import_ofx(
         account.account_id, duplicate_fitid_ofx_bytes, db
     )
     assert imported_count == 1
     assert duplicate_count == 1
+    assert len(transaction_ids) == 1
     assert db.query(Transaction).count() == 1
 
 

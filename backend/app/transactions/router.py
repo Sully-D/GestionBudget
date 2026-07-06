@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import get_db
+from app.projections.rapprochement import propose_if_match
 from app.transactions.schema import (
     TransactionCreate,
     TransactionRead,
@@ -77,6 +78,7 @@ def get_transactions(
 @router.post("")
 def post_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
     transaction = create_transaction(payload, db)
+    propose_if_match(transaction.transaction_id, db)
     return {"data": TransactionRead.model_validate(transaction)}
 
 

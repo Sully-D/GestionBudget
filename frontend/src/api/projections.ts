@@ -198,6 +198,33 @@ export async function deletePlannedExpense(expenseId: number): Promise<void> {
   await unwrap<null>(response)
 }
 
+export interface RapprochementCandidate {
+  match_id: number
+  recurring_id: number
+  transaction_id: number
+  recurring_label: string
+  recurring_periodicity: Periodicity
+  transaction_date: string
+  transaction_amount: number
+  transaction_label: string
+}
+
+export async function getPendingRapprochements(accountId: number): Promise<RapprochementCandidate[]> {
+  const params = new URLSearchParams({ account_id: String(accountId) })
+  const response = await fetch(`/rapprochement/pending?${params.toString()}`)
+  return unwrap<RapprochementCandidate[]>(response)
+}
+
+export async function confirmRapprochement(matchId: number): Promise<{ match_id: number; status: string }> {
+  const response = await fetch(`/rapprochement/${matchId}/confirm`, { method: 'POST' })
+  return unwrap<{ match_id: number; status: string }>(response)
+}
+
+export async function rejectRapprochement(matchId: number): Promise<void> {
+  const response = await fetch(`/rapprochement/${matchId}`, { method: 'DELETE' })
+  await unwrap<null>(response)
+}
+
 export async function getProjection(
   accountId: number,
   horizonMonths: 1 | 3 | 6 = 3,

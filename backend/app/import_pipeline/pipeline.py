@@ -21,8 +21,9 @@ def _persist_and_tag(
     items: list[tuple[date_, Decimal, str, str | None, str | None]],
     rules: list[Rule],
     db: Session,
-) -> None:
+) -> list[int]:
     try:
+        transaction_ids: list[int] = []
         for item_date, amount, label, payee, fitid in items:
             transaction = Transaction(
                 account_id=account_id,
@@ -34,12 +35,14 @@ def _persist_and_tag(
             )
             db.add(transaction)
             db.flush()  # obtient transaction_id sans committer — requis pour la FK de TransactionTag ci-dessous
+            transaction_ids.append(transaction.transaction_id)
             rule = evaluate_rules_verbose(rules, label, payee)
             if rule is not None:
                 db.add(
                     TransactionTag(transaction_id=transaction.transaction_id, tag_id=rule.tag_id)
                 )
         db.commit()
+        return transaction_ids
     except Exception as exc:
         db.rollback()
         raise HTTPException(
@@ -48,7 +51,7 @@ def _persist_and_tag(
         ) from exc
 
 
-def import_ofx(account_id: int, raw: bytes, db: Session) -> tuple[int, int]:
+def import_ofx(account_id: int, raw: bytes, db: Session) -> tuple[int, int, list[int]]:
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
@@ -61,14 +64,14 @@ def import_ofx(account_id: int, raw: bytes, db: Session) -> tuple[int, int]:
     new_transactions, duplicate_count = split_new_and_duplicates(parsed, account_id, db)
     rules = list_rules(db)
 
-    _persist_and_tag(
+    transaction_ids = _persist_and_tag(
         account_id,
         [(item.date, item.amount, item.label, item.payee, item.fitid) for item in new_transactions],
         rules,
         db,
     )
 
-    return len(new_transactions), duplicate_count
+    return len(new_transactions), duplicate_count, transaction_ids
 
 
 def preview_csv(raw: bytes) -> CsvPreview:
@@ -80,7 +83,7 @@ def preview_csv(raw: bytes) -> CsvPreview:
 
 def import_csv(
     account_id: int, raw: bytes, mapping: ColumnMapping, db: Session
-) -> tuple[int, int]:
+) -> tuple[int, int, list[int]]:
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
@@ -93,11 +96,11 @@ def import_csv(
     rules = list_rules(db)
 
     # pas de fitid : les imports CSV n'ont pas de clé de déduplication (AC #5)
-    _persist_and_tag(
+    transaction_ids = _persist_and_tag(
         account_id,
         [(item.date, item.amount, item.label, item.payee, None) for item in parsed],
         rules,
         db,
     )
 
-    return len(parsed), skipped_count
+    return len(parsed), skipped_count, transaction_ids

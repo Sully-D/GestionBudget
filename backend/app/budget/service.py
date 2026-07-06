@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
@@ -9,15 +10,23 @@ from app.accounts.service import compute_period
 from app.budget.model import BudgetTarget, Revenue
 from app.budget.schema import (
     BudgetTargetUpsert,
+    DisponibleRead,
     RevenueOneOffCreate,
     RevenuePeriodSummary,
     RevenueRead,
     RevenueSalaireUpsert,
     TagTrackingRead,
 )
-from app.core.period import period_for
+from app.core.period import add_months, period_for
+from app.projections.model import PlannedExpense, RecurringMatch, RecurringTransaction
 from app.tags.model import Tag
 from app.transactions.model import Transaction, TransactionTag
+
+RECURRING_PERIODICITY_MONTHS: dict[str, int] = {
+    "mensuelle": 1,
+    "trimestrielle": 3,
+    "annuelle": 12,
+}
 
 
 def _get_personal_account_or_404(account_id: int, db: Session) -> Account:
@@ -322,3 +331,191 @@ def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[T
         )
 
     return result
+
+
+def _signature_for_transaction(transaction: Transaction) -> str:
+    return (
+        transaction.payee.strip().lower()
+        if transaction.payee and transaction.payee.strip()
+        else transaction.label.strip().lower()
+    )
+
+
+def _advance_recurring_date(current: date, periodicity: str) -> date:
+    if periodicity == "hebdomadaire":
+        return current + timedelta(days=7)
+    return add_months(current, RECURRING_PERIODICITY_MONTHS[periodicity])
+
+
+def _recurring_anchor_date(account_id: int, signature: str, db: Session) -> date | None:
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.account_id == account_id, Transaction.amount < 0)
+        .all()
+    )
+    pending_transaction_ids = {
+        row.transaction_id
+        for row in db.query(RecurringMatch.transaction_id)
+        .filter(RecurringMatch.status == "pending")
+        .all()
+    }
+    matching_dates = [
+        transaction.date
+        for transaction in transactions
+        if _signature_for_transaction(transaction) == signature
+        and transaction.transaction_id not in pending_transaction_ids
+    ]
+    if not matching_dates:
+        return None
+    return max(matching_dates)
+
+
+def _is_recurring_due_in_period(
+    anchor: date, periodicity: str, period_start: date, period_end: date
+) -> bool:
+    current = _advance_recurring_date(anchor, periodicity)
+    while current < period_start:
+        current = _advance_recurring_date(current, periodicity)
+    return current <= period_end
+
+
+def _charges_recurrentes_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> Decimal:
+    confirmed_recurring = (
+        db.query(RecurringTransaction)
+        .filter(
+            RecurringTransaction.account_id == account_id,
+            RecurringTransaction.status == "confirmed",
+        )
+        .all()
+    )
+    if not confirmed_recurring:
+        return Decimal("0.00")
+
+    total = Decimal("0.00")
+    realized_ids: set[int] = set()
+    realized_rows = (
+        db.query(RecurringMatch.recurring_id, Transaction.amount)
+        .join(Transaction, Transaction.transaction_id == RecurringMatch.transaction_id)
+        .join(
+            RecurringTransaction,
+            RecurringTransaction.recurring_id == RecurringMatch.recurring_id,
+        )
+        .filter(
+            RecurringTransaction.account_id == account_id,
+            RecurringTransaction.status == "confirmed",
+            RecurringMatch.status == "confirmed",
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+        )
+        .all()
+    )
+    for recurring_id, amount in realized_rows:
+        total += abs(amount)
+        realized_ids.add(recurring_id)
+
+    # Une Récurrente déjà liée à une Transaction de la Période (même via un
+    # Rapprochement `pending`, pas encore confirmé) ne doit pas recevoir de
+    # charge projetée en plus : la Transaction reste comptée dans les Dépenses
+    # courantes tant que non confirmée, ajouter la charge projetée compterait
+    # la même dépense deux fois.
+    matched_ids_in_period = {
+        row.recurring_id
+        for row in db.query(RecurringMatch.recurring_id)
+        .join(Transaction, Transaction.transaction_id == RecurringMatch.transaction_id)
+        .join(
+            RecurringTransaction,
+            RecurringTransaction.recurring_id == RecurringMatch.recurring_id,
+        )
+        .filter(
+            RecurringTransaction.account_id == account_id,
+            RecurringTransaction.status == "confirmed",
+            RecurringMatch.status.in_(["pending", "confirmed"]),
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+        )
+        .all()
+    }
+
+    for recurring in confirmed_recurring:
+        if recurring.recurring_id in matched_ids_in_period:
+            continue
+        anchor = _recurring_anchor_date(account_id, recurring.signature, db)
+        if anchor is None:
+            continue
+        if _is_recurring_due_in_period(anchor, recurring.periodicity, period_start, period_end):
+            total += abs(recurring.amount)
+
+    return total
+
+
+def _depenses_courantes_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> Decimal:
+    matched_transaction_ids = {
+        row.transaction_id
+        for row in db.query(RecurringMatch.transaction_id)
+        .join(
+            RecurringTransaction,
+            RecurringTransaction.recurring_id == RecurringMatch.recurring_id,
+        )
+        .filter(
+            RecurringTransaction.account_id == account_id,
+            RecurringMatch.status == "confirmed",
+        )
+        .all()
+    }
+
+    transactions = (
+        db.query(Transaction)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+            Transaction.amount < 0,
+        )
+        .all()
+    )
+    return sum(
+        (abs(t.amount) for t in transactions if t.transaction_id not in matched_transaction_ids),
+        Decimal("0.00"),
+    )
+
+
+def _depenses_planifiees_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> Decimal:
+    total = (
+        db.query(func.sum(PlannedExpense.amount))
+        .filter(
+            PlannedExpense.account_id == account_id,
+            PlannedExpense.date >= period_start,
+            PlannedExpense.date <= period_end,
+        )
+        .scalar()
+        or Decimal("0.00")
+    )
+    return abs(total)
+
+
+def get_disponible(account_id: int, period_start: date, db: Session) -> DisponibleRead:
+    account = _get_personal_account_or_404(account_id, db)
+    period_start, period_end = period_for(account.start_day, period_start)
+
+    revenus = get_period_summary(account_id, period_start, db).total
+    charges_recurrentes = _charges_recurrentes_for_period(account_id, period_start, period_end, db)
+    depenses_planifiees = _depenses_planifiees_for_period(account_id, period_start, period_end, db)
+    depenses_courantes = _depenses_courantes_for_period(account_id, period_start, period_end, db)
+    disponible = revenus - charges_recurrentes - depenses_planifiees - depenses_courantes
+
+    return DisponibleRead(
+        account_id=account_id,
+        period_start=period_start,
+        period_end=period_end,
+        revenus=revenus,
+        charges_recurrentes=charges_recurrentes,
+        depenses_planifiees=depenses_planifiees,
+        depenses_courantes=depenses_courantes,
+        disponible=disponible,
+    )

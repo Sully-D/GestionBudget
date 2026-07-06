@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -7,7 +9,18 @@ from sqlalchemy.orm import sessionmaker
 
 from app.accounts.model import Account
 from app.core.db import Base, get_db
+from app.transactions.model import Transaction
 from main import app
+
+
+def _add_transaction_via_override(client, **kwargs):
+    session = next(app.dependency_overrides[get_db]())
+    try:
+        transaction = Transaction(**kwargs)
+        session.add(transaction)
+        session.commit()
+    finally:
+        session.close()
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
@@ -114,3 +127,34 @@ def test_post_import_ofx_applies_matching_rule_tag(client, account_id, sample_of
     ).json()["data"]["transactions"]
     carrefour = next(t for t in transactions if t["payee"] == "CARREFOUR MARKET")
     assert [t["tag_id"] for t in carrefour["tags"]] == [tag_id]
+
+
+def test_post_import_ofx_matching_recurring_creates_pending_rapprochement(
+    client, account_id, sample_ofx_bytes
+):
+    _add_transaction_via_override(
+        client,
+        account_id=account_id,
+        date=date(2026, 5, 15),
+        amount=Decimal("-45.90"),
+        label="CARREFOUR MARKET",
+        payee="CARREFOUR MARKET",
+    )
+    client.post(
+        "/recurring/confirm",
+        json={
+            "account_id": account_id,
+            "signature": "carrefour market",
+            "label": "Carrefour Market",
+            "amount": -45.90,
+            "periodicity": "mensuelle",
+        },
+    )
+
+    _post_import(client, account_id, sample_ofx_bytes)
+
+    pending = client.get("/rapprochement/pending", params={"account_id": account_id})
+    assert pending.status_code == 200
+    data = pending.json()["data"]
+    assert len(data) == 1
+    assert data[0]["transaction_label"] == "CARREFOUR MARKET"

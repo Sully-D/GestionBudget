@@ -34,6 +34,25 @@ class RecurringTransaction(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class RecurringMatch(Base):
+    __tablename__ = "recurring_matches"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'rejected')",
+            name="ck_recurring_matches_status",
+        ),
+    )
+
+    match_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recurring_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("recurring_transactions.recurring_id"), nullable=False
+    )
+    transaction_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("transactions.transaction_id"), nullable=False, unique=True
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class PlannedExpense(Base):
     __tablename__ = "planned_expenses"
 

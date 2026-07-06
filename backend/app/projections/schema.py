@@ -126,6 +126,23 @@ class PlannedExpenseRead(BaseModel):
         return float(value)
 
 
+class RapprochementCandidateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=False)
+
+    match_id: int
+    recurring_id: int
+    transaction_id: int
+    recurring_label: str
+    recurring_periodicity: str
+    transaction_date: date
+    transaction_amount: Decimal
+    transaction_label: str
+
+    @field_serializer("transaction_amount", when_used="json")
+    def _serialize_transaction_amount(self, value: Decimal) -> float:
+        return float(value)
+
+
 class ProjectionItemRead(BaseModel):
     date: date
     type: Literal["recurrente", "planifiee"]

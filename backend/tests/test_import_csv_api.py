@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -7,9 +9,20 @@ from sqlalchemy.orm import sessionmaker
 
 from app.accounts.model import Account
 from app.core.db import Base, get_db
+from app.transactions.model import Transaction
 from main import app
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def _add_transaction_via_override(client, **kwargs):
+    session = next(app.dependency_overrides[get_db]())
+    try:
+        transaction = Transaction(**kwargs)
+        session.add(transaction)
+        session.commit()
+    finally:
+        session.close()
 
 
 @pytest.fixture
@@ -142,3 +155,39 @@ def test_post_import_csv_duplicate_mapped_column_returns_400(client, account_id,
         files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
     )
     assert response.status_code == 400
+
+
+def test_post_import_csv_matching_recurring_creates_pending_rapprochement(
+    client, account_id, sample_csv_bytes
+):
+    _add_transaction_via_override(
+        client,
+        account_id=account_id,
+        date=date(2026, 6, 1),
+        amount=Decimal("-42.90"),
+        label="CB CARREFOUR MARKET REIMS",
+        payee="CARREFOUR",
+    )
+    client.post(
+        "/recurring/confirm",
+        json={
+            "account_id": account_id,
+            "signature": "carrefour",
+            "label": "Carrefour Market",
+            "amount": -42.90,
+            "periodicity": "mensuelle",
+        },
+    )
+
+    response = client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert response.status_code == 200
+
+    pending = client.get("/rapprochement/pending", params={"account_id": account_id})
+    assert pending.status_code == 200
+    data = pending.json()["data"]
+    assert len(data) == 1
+    assert data[0]["transaction_label"] == "CB CARREFOUR MARKET REIMS"
