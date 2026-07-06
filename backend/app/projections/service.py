@@ -1,12 +1,19 @@
 from collections import defaultdict
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
-from app.projections.model import RecurringTransaction
+from app.core.period import add_months, period_for
+from app.projections.model import PlannedExpense, RecurringTransaction
 from app.projections.schema import (
+    PlannedExpenseSimpleCreate,
+    PlannedExpenseSplitCreate,
+    PlannedExpenseUpdate,
+    ProjectionItemRead,
     RecurringCandidateRead,
     RecurringConfirmCreate,
     RecurringRejectCreate,
@@ -15,6 +22,12 @@ from app.projections.schema import (
 from app.tags.model import Tag
 from app.tags.service import evaluate_transaction_tag
 from app.transactions.model import Transaction
+
+RECURRING_PERIODICITY_MONTHS: dict[str, int] = {
+    "mensuelle": 1,
+    "trimestrielle": 3,
+    "annuelle": 12,
+}
 
 PERIODICITY_BOUNDS: dict[str, tuple[int, int]] = {
     "hebdomadaire": (6, 8),
@@ -58,6 +71,14 @@ def _classify_periodicity(intervals: list[int]) -> str | None:
     return categories.pop()
 
 
+def _signature_for_transaction(transaction: Transaction) -> str:
+    return (
+        transaction.payee.strip().lower()
+        if transaction.payee and transaction.payee.strip()
+        else transaction.label.strip().lower()
+    )
+
+
 def _median(values: list[Decimal]) -> Decimal:
     ordered = sorted(values)
     count = len(ordered)
@@ -83,11 +104,7 @@ def detect_recurring_candidates(
 
     groups: dict[str, list[Transaction]] = defaultdict(list)
     for transaction in transactions:
-        signature = (
-            transaction.payee.strip().lower()
-            if transaction.payee and transaction.payee.strip()
-            else transaction.label.strip().lower()
-        )
+        signature = _signature_for_transaction(transaction)
         groups[signature].append(transaction)
 
     existing_signatures = {
@@ -220,3 +237,224 @@ def list_recurring(
     if status is not None:
         query = query.filter(RecurringTransaction.status == status)
     return query.order_by(RecurringTransaction.recurring_id).all()
+
+
+def create_planned_expense(payload: PlannedExpenseSimpleCreate, db: Session) -> PlannedExpense:
+    _get_personal_account_or_404(payload.account_id, db)
+    _get_tag_or_404(payload.tag_id, db)
+    planned_expense = PlannedExpense(
+        account_id=payload.account_id,
+        tag_id=payload.tag_id,
+        series_id=None,
+        period_index=None,
+        total_periods=None,
+        amount=payload.amount,
+        date=payload.date,
+        description=payload.description,
+    )
+    db.add(planned_expense)
+    db.commit()
+    db.refresh(planned_expense)
+    return planned_expense
+
+
+def create_planned_expense_split(
+    payload: PlannedExpenseSplitCreate, db: Session
+) -> list[PlannedExpense]:
+    account = _get_personal_account_or_404(payload.account_id, db)
+    _get_tag_or_404(payload.tag_id, db)
+
+    total_periods = payload.total_periods
+    period_starts: list[date] = []
+    period_start, period_end = period_for(account.start_day, payload.start_date)
+    period_starts.append(period_start)
+    for _ in range(2, total_periods + 1):
+        period_start, period_end = period_for(account.start_day, period_end + timedelta(days=1))
+        period_starts.append(period_start)
+
+    base = (payload.total_amount / total_periods).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    if base == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Montant total insuffisant pour ce nombre de périodes",
+        )
+    amounts: list[Decimal] = [-base for _ in range(total_periods - 1)]
+    amounts.append(-payload.total_amount - sum(amounts))
+
+    series_id = str(uuid4())
+    planned_expenses: list[PlannedExpense] = []
+    for index in range(total_periods):
+        planned_expense = PlannedExpense(
+            account_id=payload.account_id,
+            tag_id=payload.tag_id,
+            series_id=series_id,
+            period_index=index + 1,
+            total_periods=total_periods,
+            amount=amounts[index],
+            date=period_starts[index],
+            description=payload.description,
+        )
+        db.add(planned_expense)
+        planned_expenses.append(planned_expense)
+    db.commit()
+    for planned_expense in planned_expenses:
+        db.refresh(planned_expense)
+    return planned_expenses
+
+
+def _get_planned_expense_or_404(expense_id: int, db: Session) -> PlannedExpense:
+    planned_expense = db.get(PlannedExpense, expense_id)
+    if planned_expense is None:
+        raise HTTPException(
+            status_code=404, detail=f"Dépense planifiée {expense_id} introuvable"
+        )
+    return planned_expense
+
+
+def update_planned_expense(
+    expense_id: int, payload: PlannedExpenseUpdate, db: Session
+) -> PlannedExpense:
+    planned_expense = _get_planned_expense_or_404(expense_id, db)
+    _get_tag_or_404(payload.tag_id, db)
+    planned_expense.date = payload.date
+    planned_expense.amount = payload.amount
+    planned_expense.tag_id = payload.tag_id
+    planned_expense.description = payload.description
+    db.commit()
+    db.refresh(planned_expense)
+    return planned_expense
+
+
+def delete_planned_expense(expense_id: int, db: Session) -> None:
+    planned_expense = _get_planned_expense_or_404(expense_id, db)
+    if planned_expense.series_id is not None:
+        db.query(PlannedExpense).filter(
+            PlannedExpense.series_id == planned_expense.series_id
+        ).delete()
+    else:
+        db.delete(planned_expense)
+    db.commit()
+
+
+def list_planned_expenses(account_id: int, db: Session) -> list[PlannedExpense]:
+    _get_personal_account_or_404(account_id, db)
+    return (
+        db.query(PlannedExpense)
+        .filter(PlannedExpense.account_id == account_id)
+        .order_by(PlannedExpense.date, PlannedExpense.expense_id)
+        .all()
+    )
+
+
+def _advance_recurring_date(current: date, periodicity: str) -> date:
+    if periodicity == "hebdomadaire":
+        return current + timedelta(days=7)
+    return add_months(current, RECURRING_PERIODICITY_MONTHS[periodicity])
+
+
+def _anchor_date_for_signature(account_id: int, signature: str, db: Session) -> date | None:
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.account_id == account_id, Transaction.amount < 0)
+        .all()
+    )
+    matching_dates = [
+        transaction.date
+        for transaction in transactions
+        if _signature_for_transaction(transaction) == signature
+    ]
+    if not matching_dates:
+        return None
+    return max(matching_dates)
+
+
+def _recurring_occurrences_in_horizon(
+    anchor: date, periodicity: str, today: date, horizon_end: date
+) -> list[date]:
+    current = anchor
+    while current <= today:
+        current = _advance_recurring_date(current, periodicity)
+
+    occurrences: list[date] = []
+    while current <= horizon_end:
+        occurrences.append(current)
+        current = _advance_recurring_date(current, periodicity)
+    return occurrences
+
+
+def get_projection(
+    account_id: int, horizon_months: int, db: Session
+) -> list[ProjectionItemRead]:
+    _get_personal_account_or_404(account_id, db)
+    today = date.today()
+    horizon_end = add_months(today, horizon_months)
+
+    tag_names = {tag.tag_id: tag.name for tag in db.query(Tag).all()}
+
+    def resolve_tag(tag_id: int | None) -> tuple[int | None, str | None]:
+        if tag_id is not None and tag_id in tag_names:
+            return tag_id, tag_names[tag_id]
+        return None, None
+
+    entries: list[tuple[ProjectionItemRead, int]] = []
+
+    planned_expenses = (
+        db.query(PlannedExpense)
+        .filter(
+            PlannedExpense.account_id == account_id,
+            PlannedExpense.date >= today,
+            PlannedExpense.date <= horizon_end,
+        )
+        .all()
+    )
+    for planned_expense in planned_expenses:
+        tag_id, tag_name = resolve_tag(planned_expense.tag_id)
+        entries.append(
+            (
+                ProjectionItemRead(
+                    date=planned_expense.date,
+                    type="planifiee",
+                    label=planned_expense.description,
+                    amount=planned_expense.amount,
+                    tag_id=tag_id,
+                    tag_name=tag_name,
+                ),
+                planned_expense.expense_id,
+            )
+        )
+
+    recurring_transactions = (
+        db.query(RecurringTransaction)
+        .filter(
+            RecurringTransaction.account_id == account_id,
+            RecurringTransaction.status == "confirmed",
+        )
+        .all()
+    )
+    for recurring in recurring_transactions:
+        anchor = _anchor_date_for_signature(account_id, recurring.signature, db)
+        if anchor is None:
+            continue
+        occurrences = _recurring_occurrences_in_horizon(
+            anchor, recurring.periodicity, today, horizon_end
+        )
+        tag_id, tag_name = resolve_tag(recurring.tag_id)
+        for occurrence_date in occurrences:
+            entries.append(
+                (
+                    ProjectionItemRead(
+                        date=occurrence_date,
+                        type="recurrente",
+                        label=recurring.label,
+                        amount=recurring.amount,
+                        tag_id=tag_id,
+                        tag_name=tag_name,
+                    ),
+                    recurring.recurring_id,
+                )
+            )
+
+    entries.sort(key=lambda entry: (entry[0].date, entry[0].type, entry[0].label, entry[1]))
+    return [item for item, _ in entries]

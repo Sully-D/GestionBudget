@@ -4,6 +4,7 @@ import Comptes from './pages/Comptes'
 import Import from './pages/Import'
 import ModifierTransaction from './pages/ModifierTransaction'
 import NouvelleTransaction from './pages/NouvelleTransaction'
+import Projection from './pages/Projection'
 import Recurrentes from './pages/Recurrentes'
 import Transactions from './pages/Transactions'
 
@@ -38,6 +39,9 @@ function App() {
           <Link to="/recurrentes" className="text-body text-ink-muted hover:text-ink">
             Récurrentes
           </Link>
+          <Link to="/projection" className="text-body text-ink-muted hover:text-ink">
+            Projection
+          </Link>
           <Link
             to="/transactions/nouvelle"
             className="rounded-lg bg-accent px-3 py-1.5 text-body-strong text-surface"
@@ -55,6 +59,7 @@ function App() {
         <Route path="/transactions/:id/modifier" element={<ModifierTransaction />} />
         <Route path="/budget" element={<Budget />} />
         <Route path="/recurrentes" element={<Recurrentes />} />
+        <Route path="/projection" element={<Projection />} />
       </Routes>
     </div>
   )

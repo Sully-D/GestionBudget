@@ -105,3 +105,107 @@ export async function deleteRecurring(recurringId: number): Promise<void> {
   const response = await fetch(`/recurring/${recurringId}`, { method: 'DELETE' })
   await unwrap<null>(response)
 }
+
+export interface PlannedExpense {
+  expense_id: number
+  account_id: number
+  tag_id: number
+  series_id: string | null
+  period_index: number | null
+  total_periods: number | null
+  amount: number
+  date: string
+  description: string
+}
+
+export interface PlannedExpenseSimplePayload {
+  account_id: number
+  tag_id: number
+  date: string
+  amount: number
+  description: string
+}
+
+export interface PlannedExpenseSplitPayload {
+  account_id: number
+  tag_id: number
+  start_date: string
+  total_amount: number
+  total_periods: number
+  description: string
+}
+
+export interface PlannedExpenseUpdatePayload {
+  date: string
+  amount: number
+  tag_id: number
+  description: string
+}
+
+export type ProjectionItemType = 'recurrente' | 'planifiee'
+
+export interface ProjectionItem {
+  date: string
+  type: ProjectionItemType
+  label: string
+  amount: number
+  tag_id: number | null
+  tag_name: string | null
+}
+
+export async function createPlannedExpense(
+  payload: PlannedExpenseSimplePayload,
+): Promise<PlannedExpense> {
+  const response = await fetch('/planned-expenses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return unwrap<PlannedExpense>(response)
+}
+
+export async function createPlannedExpenseSplit(
+  payload: PlannedExpenseSplitPayload,
+): Promise<PlannedExpense[]> {
+  const response = await fetch('/planned-expenses/split', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return unwrap<PlannedExpense[]>(response)
+}
+
+export async function getPlannedExpenses(accountId: number): Promise<PlannedExpense[]> {
+  const params = new URLSearchParams({ account_id: String(accountId) })
+  const response = await fetch(`/planned-expenses?${params.toString()}`)
+  return unwrap<PlannedExpense[]>(response)
+}
+
+export async function updatePlannedExpense(
+  expenseId: number,
+  payload: PlannedExpenseUpdatePayload,
+): Promise<PlannedExpense> {
+  const response = await fetch(`/planned-expenses/${expenseId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return unwrap<PlannedExpense>(response)
+}
+
+export async function deletePlannedExpense(expenseId: number): Promise<void> {
+  const response = await fetch(`/planned-expenses/${expenseId}`, { method: 'DELETE' })
+  await unwrap<null>(response)
+}
+
+export async function getProjection(
+  accountId: number,
+  horizonMonths: 1 | 3 | 6 = 3,
+): Promise<ProjectionItem[]> {
+  const params = new URLSearchParams({
+    account_id: String(accountId),
+    horizon_months: String(horizonMonths),
+  })
+  const response = await fetch(`/projection?${params.toString()}`)
+  return unwrap<ProjectionItem[]>(response)
+}

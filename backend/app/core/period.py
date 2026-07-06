@@ -31,3 +31,11 @@ def period_for(start_day: int, reference_date: date) -> tuple[date, date]:
     period_end = next_period_start - timedelta(days=1)
 
     return period_start, period_end
+
+
+def add_months(reference_date: date, months: int) -> date:
+    year, month = reference_date.year, reference_date.month
+    for _ in range(months):
+        year, month = _add_month(year, month)
+    day = _clamped_day(year, month, reference_date.day)
+    return date(year, month, day)
