@@ -8,6 +8,7 @@ from app.budget.targets_router import router as budget_targets_router
 from app.budget.tracking_router import router as budget_tracking_router
 from app.core.config import settings
 from app.import_pipeline.router import router as import_router
+from app.projections.router import router as projections_router
 from app.tags.router import router as tags_router
 from app.tags.rules_router import router as rules_router
 from app.transactions.router import router as transactions_router
@@ -39,5 +40,6 @@ app.include_router(budget_router)
 app.include_router(budget_targets_router)
 app.include_router(budget_tracking_router)
 app.include_router(import_router)
+app.include_router(projections_router)
 
 app.frontend("/", directory=settings.frontend_dist_dir, fallback="index.html")
