@@ -15,6 +15,7 @@ from app.budget.schema import (
     RevenuePeriodSummary,
     RevenueRead,
     RevenueSalaireUpsert,
+    TagSpendingRead,
     TagTrackingRead,
 )
 from app.core.period import add_months, period_for
@@ -29,10 +30,15 @@ RECURRING_PERIODICITY_MONTHS: dict[str, int] = {
 }
 
 
-def _get_personal_account_or_404(account_id: int, db: Session) -> Account:
+def _get_account_or_404(account_id: int, db: Session) -> Account:
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
+    return account
+
+
+def _get_personal_account_or_404(account_id: int, db: Session) -> Account:
+    account = _get_account_or_404(account_id, db)
     if account.is_common:
         raise HTTPException(
             status_code=422, detail="Le Compte Commun n'a pas de revenus propres"
@@ -230,12 +236,9 @@ def delete_budget_target(target_id: int, db: Session) -> None:
     db.commit()
 
 
-def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[TagTrackingRead]:
-    account = _get_personal_account_or_404(account_id, db)
-    today = date.today()
-    period_start, period_end = period_for(account.start_day, period_start)
-    is_current_period = period_start == compute_period(account, today)[0]
-
+def _spent_by_tag_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> tuple[dict[int, Decimal], dict[int, Tag]]:
     rows = (
         db.query(TransactionTag.transaction_id, TransactionTag.tag_id, Transaction.amount)
         .join(Transaction, Transaction.transaction_id == TransactionTag.transaction_id)
@@ -277,6 +280,17 @@ def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[T
         for tag_id in affected_tag_ids:
             if tag_id in total_spent:
                 total_spent[tag_id] += amount
+
+    return total_spent, tag_by_id
+
+
+def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[TagTrackingRead]:
+    account = _get_personal_account_or_404(account_id, db)
+    today = date.today()
+    period_start, period_end = period_for(account.start_day, period_start)
+    is_current_period = period_start == compute_period(account, today)[0]
+
+    total_spent, tag_by_id = _spent_by_tag_for_period(account_id, period_start, period_end, db)
 
     targets = db.query(BudgetTarget).filter(BudgetTarget.account_id == account_id).all()
     target_by_tag = {
@@ -327,6 +341,30 @@ def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[T
                 target_amount=target_amount,
                 gap=gap,
                 projection=projection,
+            )
+        )
+
+    return result
+
+
+def get_tag_spending(account_id: int, period_start: date, db: Session) -> list[TagSpendingRead]:
+    account = _get_account_or_404(account_id, db)
+
+    period_start, period_end = period_for(account.start_day, period_start)
+    total_spent, tag_by_id = _spent_by_tag_for_period(account_id, period_start, period_end, db)
+
+    included_tag_ids = {tag_id for tag_id, spent in total_spent.items() if spent != 0}
+
+    result: list[TagSpendingRead] = []
+    for tag_id in sorted(included_tag_ids):
+        tag = tag_by_id[tag_id]
+        result.append(
+            TagSpendingRead(
+                tag_id=tag.tag_id,
+                tag_name=tag.name,
+                parent_id=tag.parent_id,
+                level=tag.level,
+                spent=total_spent[tag_id],
             )
         )
 

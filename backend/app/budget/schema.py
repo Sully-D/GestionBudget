@@ -98,6 +98,18 @@ class TagTrackingRead(BaseModel):
         return float(value) if value is not None else None
 
 
+class TagSpendingRead(BaseModel):
+    tag_id: int
+    tag_name: str
+    parent_id: int | None
+    level: int
+    spent: Decimal
+
+    @field_serializer("spent", when_used="json")
+    def _serialize_spent(self, value: Decimal) -> float:
+        return float(value)
+
+
 class DisponibleRead(BaseModel):
     account_id: int
     period_start: date

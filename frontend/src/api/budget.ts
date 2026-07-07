@@ -137,3 +137,17 @@ export async function getTagTracking(accountId: number, periodStart: string): Pr
   const response = await fetch(`/tag-tracking?${params.toString()}`)
   return unwrap<TagTracking[]>(response)
 }
+
+export interface TagSpending {
+  tag_id: number
+  tag_name: string
+  parent_id: number | null
+  level: number
+  spent: number
+}
+
+export async function getTagSpending(accountId: number, periodStart: string): Promise<TagSpending[]> {
+  const params = new URLSearchParams({ account_id: String(accountId), period_start: periodStart })
+  const response = await fetch(`/tag-spending?${params.toString()}`)
+  return unwrap<TagSpending[]>(response)
+}

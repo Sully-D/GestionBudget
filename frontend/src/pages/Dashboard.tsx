@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
-import { getDisponible, getTagTracking } from '../api/budget'
-import type { Disponible, TagTracking } from '../api/budget'
+import { getDisponible, getTagSpending, getTagTracking } from '../api/budget'
+import type { Disponible, TagSpending, TagTracking } from '../api/budget'
+import { getTransactions } from '../api/transactions'
+import type { Transaction } from '../api/transactions'
 import AccountCard from '../components/AccountCard'
-import { breadcrumbPath, formatMontant, formatPourcentage } from '../lib/format'
+import { breadcrumbPath, formatDate, formatMontant, formatPourcentage, shiftDate } from '../lib/format'
 
 type TagStatus = 'ok' | 'warn' | 'over'
 
@@ -20,6 +22,11 @@ interface EnrichedTagRow {
   pctRevenus: number | null
   status: TagStatus | null
   ratio: number
+}
+
+interface EnrichedSpendingRow {
+  row: TagSpending
+  label: string
 }
 
 // Seuils confirmés EXPERIENCE.md : OK < 90 %, proche (warn) 90-99 %, dépassement (over) >= 100 %.
@@ -88,10 +95,25 @@ function buildEnrichedRows(tagTracking: TagTracking[], revenus: number | null): 
   })
 }
 
+// Répartition par Tag du Compte Commun (AC #3, sans Cible) : même reconstruction
+// de breadcrumb locale que `buildEnrichedRows`, sans statut/barre/cible — cette
+// forme (`TagSpending`) n'en a jamais.
+function buildSpendingRows(tagSpending: TagSpending[]): EnrichedSpendingRow[] {
+  const tagById = new Map<number, TrackingTagRef>(
+    tagSpending.map((r) => [r.tag_id, { tag_id: r.tag_id, name: r.tag_name, parent_id: r.parent_id }]),
+  )
+  return tagSpending.map((row) => ({
+    row,
+    label: breadcrumbPath({ tag_id: row.tag_id, name: row.tag_name, parent_id: row.parent_id }, tagById),
+  }))
+}
+
 function Dashboard() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [accountsError, setAccountsError] = useState<string | null>(null)
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
+
+  const [referenceDate, setReferenceDate] = useState<string | undefined>(undefined)
 
   const [disponible, setDisponible] = useState<Disponible | null>(null)
   const [disponibleLoading, setDisponibleLoading] = useState(false)
@@ -100,6 +122,16 @@ function Dashboard() {
   const [tagTracking, setTagTracking] = useState<TagTracking[]>([])
   const [tagTrackingLoading, setTagTrackingLoading] = useState(false)
   const [tagTrackingError, setTagTrackingError] = useState<string | null>(null)
+
+  const [tagSpending, setTagSpending] = useState<TagSpending[]>([])
+  const [tagSpendingLoading, setTagSpendingLoading] = useState(false)
+  const [tagSpendingError, setTagSpendingError] = useState<string | null>(null)
+
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [transactionsLoading, setTransactionsLoading] = useState(false)
+  const [transactionsError, setTransactionsError] = useState<string | null>(null)
+  const [periodStart, setPeriodStart] = useState<string | null>(null)
+  const [periodEnd, setPeriodEnd] = useState<string | null>(null)
 
   useEffect(() => {
     getAccounts()
@@ -115,56 +147,131 @@ function Dashboard() {
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) ?? null
 
+  // Changer de Compte revient toujours à sa propre Période courante, jamais à
+  // une Période archivée d'un autre Compte (cf. Dev Notes §Deux sources de
+  // Période distinctes). Ajustement pendant le rendu (plutôt qu'un useEffect
+  // séparé) pour éviter un cycle de fetch transitoire avec l'ancienne Période
+  // archivée avant que la réinitialisation ne soit prise en compte.
+  const [previousAccountId, setPreviousAccountId] = useState(selectedAccountId)
+  if (selectedAccountId !== previousAccountId) {
+    setPreviousAccountId(selectedAccountId)
+    setReferenceDate(undefined)
+  }
+
   useEffect(() => {
     setDisponible(null)
     setDisponibleError(null)
     setTagTracking([])
     setTagTrackingError(null)
+    setTagSpending([])
+    setTagSpendingError(null)
+    setTransactions([])
+    setTransactionsError(null)
+    setPeriodStart(null)
+    setPeriodEnd(null)
 
-    if (!selectedAccount || selectedAccount.is_common) return
+    if (!selectedAccount) return
 
     let cancelled = false
 
-    setDisponibleLoading(true)
-    getDisponible(selectedAccount.account_id, selectedAccount.period_start)
-      .then((data) => {
-        if (!cancelled) setDisponible(data)
+    // Seule requête commune aux deux types de Compte : fournit aussi
+    // `period_start`/`period_end` de la Période affichée (source des chevrons).
+    setTransactionsLoading(true)
+    getTransactions(selectedAccount.account_id, referenceDate)
+      .then((result) => {
+        if (cancelled) return
+        setPeriodStart(result.period_start)
+        setPeriodEnd(result.period_end)
+        setTransactions(result.transactions)
+        setTransactionsError(null)
       })
       .catch((err) => {
-        if (!cancelled) setDisponibleError(err instanceof Error ? err.message : 'Erreur inattendue')
+        if (cancelled) return
+        setTransactionsError(err instanceof Error ? err.message : 'Erreur inattendue')
+        setTransactions([])
       })
       .finally(() => {
-        if (!cancelled) setDisponibleLoading(false)
+        if (!cancelled) setTransactionsLoading(false)
       })
 
-    setTagTrackingLoading(true)
-    getTagTracking(selectedAccount.account_id, selectedAccount.period_start)
-      .then((data) => {
-        if (!cancelled) setTagTracking(data)
-      })
-      .catch((err) => {
-        if (!cancelled) setTagTrackingError(err instanceof Error ? err.message : 'Erreur inattendue')
-      })
-      .finally(() => {
-        if (!cancelled) setTagTrackingLoading(false)
-      })
+    // `referenceDate` vaut `undefined` sur la Période courante, ou une date à
+    // l'intérieur d'une Période archivée (calculée par `shiftDate`) — ces
+    // endpoints acceptent n'importe quelle date à l'intérieur de la Période cible.
+    const targetPeriodStart = referenceDate ?? selectedAccount.period_start
+
+    if (selectedAccount.is_common) {
+      setTagSpendingLoading(true)
+      getTagSpending(selectedAccount.account_id, targetPeriodStart)
+        .then((data) => {
+          if (!cancelled) setTagSpending(data)
+        })
+        .catch((err) => {
+          if (!cancelled) setTagSpendingError(err instanceof Error ? err.message : 'Erreur inattendue')
+        })
+        .finally(() => {
+          if (!cancelled) setTagSpendingLoading(false)
+        })
+    } else {
+      setDisponibleLoading(true)
+      getDisponible(selectedAccount.account_id, targetPeriodStart)
+        .then((data) => {
+          if (!cancelled) setDisponible(data)
+        })
+        .catch((err) => {
+          if (!cancelled) setDisponibleError(err instanceof Error ? err.message : 'Erreur inattendue')
+        })
+        .finally(() => {
+          if (!cancelled) setDisponibleLoading(false)
+        })
+
+      setTagTrackingLoading(true)
+      getTagTracking(selectedAccount.account_id, targetPeriodStart)
+        .then((data) => {
+          if (!cancelled) setTagTracking(data)
+        })
+        .catch((err) => {
+          if (!cancelled) setTagTrackingError(err instanceof Error ? err.message : 'Erreur inattendue')
+        })
+        .finally(() => {
+          if (!cancelled) setTagTrackingLoading(false)
+        })
+    }
 
     return () => {
       cancelled = true
     }
-  }, [selectedAccount])
+  }, [selectedAccount, referenceDate])
 
   const enrichedTagRows = buildEnrichedRows(tagTracking, disponible ? disponible.revenus : null)
+  const enrichedSpendingRows = buildSpendingRows(tagSpending)
 
   const pourcentageRevenus =
     disponible && disponible.revenus !== 0 ? (disponible.disponible / disponible.revenus) * 100 : 0
 
+  function goToPreviousPeriod() {
+    if (periodStart) setReferenceDate(shiftDate(periodStart, -1))
+  }
+
+  function goToNextPeriod() {
+    if (periodEnd) setReferenceDate(shiftDate(periodEnd, 1))
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-4 lg:px-7">
       {selectedAccount?.is_common && (
-        <p className="rounded border border-border bg-surface-panel p-4 text-body text-ink-muted">
-          Le Compte Commun n'a pas de formule Disponible.
-        </p>
+        <>
+          <p className="rounded border border-border bg-surface-panel p-4 text-body text-ink-muted">
+            Le Compte Commun n'a pas de formule Disponible.
+          </p>
+          {/* kpi-card Solde bordé classique — jamais le hero-stat fond sombre sur ce Compte
+              (DESIGN.md § kpi-card : réutilisée seule pour le Solde du Compte Commun). */}
+          <div className="mt-4 inline-block rounded border border-border bg-surface p-4">
+            <p className="text-label uppercase text-ink-muted">Solde</p>
+            <p className="mt-1 font-mono text-stat-value font-bold text-ink">
+              {formatMontant(selectedAccount.balance)}
+            </p>
+          </div>
+        </>
       )}
 
       {selectedAccount && !selectedAccount.is_common && disponibleError && (
@@ -379,9 +486,202 @@ function Dashboard() {
         </section>
       )}
 
+      {/* Liste de Transactions en lecture seule, commune aux Comptes personnels et au
+          Compte Commun (AC #1 et #3) — l'édition/suppression reste sur Transactions.tsx. */}
+      {selectedAccount && (
+        <section className="mt-8">
+          <h2 className="text-label uppercase text-ink-muted">Transactions</h2>
+
+          {transactionsError && <p className="mt-2 text-body text-alert">{transactionsError}</p>}
+
+          {transactionsLoading && transactions.length === 0 && !transactionsError && (
+            <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
+          )}
+
+          {!transactionsLoading && !transactionsError && transactions.length === 0 && (
+            <p className="mt-2 text-body text-ink-muted">Aucune Transaction sur cette Période.</p>
+          )}
+
+          {transactions.length > 0 && (
+            <>
+              <table className="mt-4 hidden w-full lg:table">
+                <thead className="bg-surface">
+                  <tr>
+                    <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Date</th>
+                    <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Libellé</th>
+                    <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Tiers</th>
+                    <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Tags</th>
+                    <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">Montant</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((transaction) => {
+                    // Virements reçus (AC #3) identifiés par couleur sur le Compte Commun
+                    // uniquement — aucune donnée d'« Origine » n'existe sur `Transaction`.
+                    const isReceivedTransfer = selectedAccount.is_common && transaction.amount > 0
+                    return (
+                      <tr key={transaction.transaction_id} className="border-t border-border-subtle">
+                        <td className="px-2 py-2 text-body text-ink">{formatDate(transaction.date)}</td>
+                        <td className="px-2 py-2 text-body text-ink">{transaction.label}</td>
+                        <td className="px-2 py-2 text-body text-ink-muted">{transaction.payee ?? ''}</td>
+                        <td className="px-2 py-2 text-body">
+                          {transaction.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {transaction.tags.map((tag) => (
+                                <span
+                                  key={tag.tag_id}
+                                  className="rounded-full bg-accent-bg px-2 py-0.5 text-caption font-bold text-accent"
+                                >
+                                  {tag.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td
+                          className={`px-2 py-2 text-right font-mono text-body-strong ${
+                            isReceivedTransfer ? 'text-positive-text-strong' : 'text-ink'
+                          }`}
+                        >
+                          {formatMontant(transaction.amount)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+
+              <div className="mt-4 flex flex-col gap-3 lg:hidden">
+                {transactions.map((transaction) => {
+                  const isReceivedTransfer = selectedAccount.is_common && transaction.amount > 0
+                  return (
+                    <div key={transaction.transaction_id} className="rounded border border-border bg-surface p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-body text-ink">{transaction.label}</span>
+                        <span
+                          className={`font-mono text-body-strong ${
+                            isReceivedTransfer ? 'text-positive-text-strong' : 'text-ink'
+                          }`}
+                        >
+                          {formatMontant(transaction.amount)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-caption text-ink-muted">{formatDate(transaction.date)}</span>
+                        <span className="text-caption text-ink-muted">{transaction.payee ?? ''}</span>
+                      </div>
+                      {transaction.tags.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {transaction.tags.map((tag) => (
+                            <span
+                              key={tag.tag_id}
+                              className="rounded-full bg-accent-bg px-2 py-0.5 text-caption font-bold text-accent"
+                            >
+                              {tag.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {/* Répartition par Tag sans Cible (AC #3) — Compte Commun uniquement, forme de
+          données distincte de `TagTracking` (pas de Cible/statut/progress-bar). */}
+      {selectedAccount?.is_common && (
+        <section className="mt-8">
+          <h2 className="text-label uppercase text-ink-muted">Répartition par Tag</h2>
+
+          {tagSpendingError && <p className="mt-2 text-body text-alert">{tagSpendingError}</p>}
+
+          {tagSpendingLoading && tagSpending.length === 0 && !tagSpendingError && (
+            <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
+          )}
+
+          {!tagSpendingLoading && !tagSpendingError && tagSpending.length === 0 && (
+            <p className="mt-2 text-body text-ink-muted">Aucune dépense taguée sur cette Période.</p>
+          )}
+
+          {enrichedSpendingRows.length > 0 && (
+            <>
+              <table className="mt-4 hidden w-full lg:table">
+                <thead className="bg-surface">
+                  <tr>
+                    <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Tag</th>
+                    <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">Dépensé</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {enrichedSpendingRows.map(({ row, label }) => (
+                    <tr key={row.tag_id} className="border-t border-border-subtle">
+                      <td className="px-2 py-2 text-body text-ink">{label}</td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
+                        {formatMontant(row.spent)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="mt-4 flex flex-col gap-3 lg:hidden">
+                {enrichedSpendingRows.map(({ row, label }) => (
+                  <div
+                    key={row.tag_id}
+                    className="flex items-center justify-between rounded border border-border bg-surface p-3"
+                  >
+                    <span className="text-body text-ink">{label}</span>
+                    <span className="font-mono text-body-strong text-ink">{formatMontant(row.spent)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
       {accountsError && <p className="mt-4 text-body text-alert">{accountsError}</p>}
 
-      <div className="mt-6 flex flex-col gap-3">
+      {/* Navigation par Période (FR-29) — locale au Dashboard, jamais au-dessus du
+          hero-stat (AC #1 de la Story 6.1, toujours en vigueur). Masquée tant
+          qu'aucun Compte n'est sélectionné (rien à naviguer). */}
+      {selectedAccount && (
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={goToPreviousPeriod}
+            aria-label="Période précédente"
+            className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
+          >
+            ‹
+          </button>
+          <span className="text-body text-ink">
+            {periodStart && periodEnd ? `${formatDate(periodStart)} – ${formatDate(periodEnd)}` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={goToNextPeriod}
+            aria-label="Période suivante"
+            className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
+          >
+            ›
+          </button>
+          <button
+            type="button"
+            onClick={() => setReferenceDate(undefined)}
+            disabled={referenceDate === undefined}
+            className="rounded border border-border px-3 py-1 text-body text-accent disabled:cursor-not-allowed disabled:text-ink-muted disabled:opacity-60"
+          >
+            Période en cours
+          </button>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col gap-3">
         {accounts.map((account) => (
           <AccountCard
             key={account.account_id}
