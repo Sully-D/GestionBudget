@@ -1,23 +1,13 @@
 import { Link, Route, Routes } from 'react-router'
 import Budget from './pages/Budget'
 import Comptes from './pages/Comptes'
+import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ModifierTransaction from './pages/ModifierTransaction'
 import NouvelleTransaction from './pages/NouvelleTransaction'
 import Projection from './pages/Projection'
 import Recurrentes from './pages/Recurrentes'
 import Transactions from './pages/Transactions'
-
-function Accueil() {
-  return (
-    <main className="flex min-h-[calc(100svh-57px)] flex-col items-center justify-center px-4 text-center sm:px-4 lg:px-7">
-      <h1 className="text-page-title font-bold text-ink">Bienvenue sur GestionDuBudget</h1>
-      <p className="mt-2 max-w-sm text-body text-ink-muted">
-        Le cockpit financier du foyer. L'application est opérationnelle.
-      </p>
-    </main>
-  )
-}
 
 function App() {
   return (
@@ -27,6 +17,9 @@ function App() {
           GestionDuBudget
         </span>
         <nav className="flex items-center gap-4">
+          <Link to="/" className="text-body text-ink-muted hover:text-ink">
+            Tableau de bord
+          </Link>
           <Link to="/comptes" className="text-body text-ink-muted hover:text-ink">
             Comptes
           </Link>
@@ -51,7 +44,7 @@ function App() {
         </nav>
       </header>
       <Routes>
-        <Route path="/" element={<Accueil />} />
+        <Route path="/" element={<Dashboard />} />
         <Route path="/comptes" element={<Comptes />} />
         <Route path="/transactions" element={<Transactions />} />
         <Route path="/transactions/import" element={<Import />} />

@@ -12,6 +12,15 @@ export function formatMontant(value: number): string {
   }).format(value)
 }
 
+// `value` est déjà exprimée en 0-100 (pas une fraction 0-1) : pas de style
+// `percent` natif d'Intl ici, un simple NumberFormat décimal + suffixe " %".
+export function formatPourcentage(value: number): string {
+  return `${new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value)} %`
+}
+
 export const conditionLabels: Record<RuleConditionType, string> = {
   label_contains: 'Libellé contient',
   payee_exact: 'Tiers =',

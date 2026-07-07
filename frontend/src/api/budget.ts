@@ -102,3 +102,20 @@ export async function deleteBudgetTarget(targetId: number): Promise<void> {
   const response = await fetch(`/budget-targets/${targetId}`, { method: 'DELETE' })
   await unwrap<null>(response)
 }
+
+export interface Disponible {
+  account_id: number
+  period_start: string
+  period_end: string
+  revenus: number
+  charges_recurrentes: number
+  depenses_planifiees: number
+  depenses_courantes: number
+  disponible: number
+}
+
+export async function getDisponible(accountId: number, periodStart: string): Promise<Disponible> {
+  const params = new URLSearchParams({ account_id: String(accountId), period_start: periodStart })
+  const response = await fetch(`/disponible?${params.toString()}`)
+  return unwrap<Disponible>(response)
+}
