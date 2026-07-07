@@ -119,3 +119,21 @@ export async function getDisponible(accountId: number, periodStart: string): Pro
   const response = await fetch(`/disponible?${params.toString()}`)
   return unwrap<Disponible>(response)
 }
+
+export interface TagTracking {
+  tag_id: number
+  tag_name: string
+  parent_id: number | null
+  level: number
+  spent: number
+  target_percentage: number | null
+  target_amount: number | null
+  gap: number | null
+  projection: number | null
+}
+
+export async function getTagTracking(accountId: number, periodStart: string): Promise<TagTracking[]> {
+  const params = new URLSearchParams({ account_id: String(accountId), period_start: periodStart })
+  const response = await fetch(`/tag-tracking?${params.toString()}`)
+  return unwrap<TagTracking[]>(response)
+}

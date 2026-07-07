@@ -26,13 +26,22 @@ export const conditionLabels: Record<RuleConditionType, string> = {
   payee_exact: 'Tiers =',
 }
 
+interface BreadcrumbNode {
+  tag_id: number
+  name: string
+  parent_id: number | null
+}
+
+// Générique sur toute forme exposant {tag_id, name, parent_id} : partagé par
+// `tagBreadcrumb` (Tag complet, api/tags.ts) et par les pages qui reconstruisent
+// une forme locale allégée depuis une autre réponse API (ex. Dashboard.tsx/TagTracking).
 // `byId` doit être mémoïsé par l'appelant (ex. `useMemo`) plutôt que reconstruit
 // à chaque appel — cette fonction est typiquement invoquée une fois par option
 // d'un <select> de Tags, soit N fois par rendu.
-export function tagBreadcrumb(tag: Tag, byId: Map<number, Tag>): string {
-  const parts: string[] = [tag.name]
-  const visited = new Set<number>([tag.tag_id])
-  let current = tag
+export function breadcrumbPath<T extends BreadcrumbNode>(node: T, byId: Map<number, T>): string {
+  const parts: string[] = [node.name]
+  const visited = new Set<number>([node.tag_id])
+  let current = node
   while (current.parent_id !== null) {
     const parent = byId.get(current.parent_id)
     if (!parent || visited.has(parent.tag_id)) break
@@ -41,6 +50,10 @@ export function tagBreadcrumb(tag: Tag, byId: Map<number, Tag>): string {
     current = parent
   }
   return parts.join(' › ')
+}
+
+export function tagBreadcrumb(tag: Tag, byId: Map<number, Tag>): string {
+  return breadcrumbPath(tag, byId)
 }
 
 export function formatDate(value: string): string {
