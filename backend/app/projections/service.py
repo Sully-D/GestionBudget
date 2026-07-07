@@ -368,18 +368,20 @@ def _anchor_date_for_signature(
     transactions = query.all()
     # Une Transaction avec un Rapprochement `pending` n'est pas encore décidée par
     # l'utilisateur : elle ne doit pas faire avancer la Récurrente dans la Projection
-    # tant qu'elle n'est pas confirmée (AC #2/#3, Story 5.3).
-    pending_transaction_ids = {
+    # tant qu'elle n'est pas confirmée (AC #2/#3, Story 5.3). Une Transaction `rejected`
+    # a été explicitement écartée par l'utilisateur comme n'étant pas cette Récurrente :
+    # elle ne doit pas non plus servir d'ancre.
+    excluded_transaction_ids = {
         row.transaction_id
         for row in db.query(RecurringMatch.transaction_id)
-        .filter(RecurringMatch.status == "pending")
+        .filter(RecurringMatch.status.in_(["pending", "rejected"]))
         .all()
     }
     matching_dates = [
         transaction.date
         for transaction in transactions
         if _signature_for_transaction(transaction) == signature
-        and transaction.transaction_id not in pending_transaction_ids
+        and transaction.transaction_id not in excluded_transaction_ids
     ]
     if not matching_dates:
         return None

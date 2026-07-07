@@ -353,17 +353,20 @@ def _recurring_anchor_date(account_id: int, signature: str, db: Session) -> date
         .filter(Transaction.account_id == account_id, Transaction.amount < 0)
         .all()
     )
-    pending_transaction_ids = {
+    # Une Transaction `pending` n'est pas encore décidée par l'utilisateur, une
+    # Transaction `rejected` a été explicitement écartée comme n'étant pas cette
+    # Récurrente : ni l'une ni l'autre ne doit servir d'ancre (cf. projections/service.py).
+    excluded_transaction_ids = {
         row.transaction_id
         for row in db.query(RecurringMatch.transaction_id)
-        .filter(RecurringMatch.status == "pending")
+        .filter(RecurringMatch.status.in_(["pending", "rejected"]))
         .all()
     }
     matching_dates = [
         transaction.date
         for transaction in transactions
         if _signature_for_transaction(transaction) == signature
-        and transaction.transaction_id not in pending_transaction_ids
+        and transaction.transaction_id not in excluded_transaction_ids
     ]
     if not matching_dates:
         return None
@@ -409,9 +412,16 @@ def _charges_recurrentes_for_period(
             Transaction.date >= period_start,
             Transaction.date <= period_end,
         )
+        .order_by(RecurringMatch.match_id)
         .all()
     )
+    # Une Récurrente compte au plus une fois par Période (cf. Dev Notes Story 5.4,
+    # §Une Récurrente compte au plus une fois par Période) : si plusieurs Transactions
+    # distinctes sont confirmées contre la même Récurrente dans la Période, ne compter
+    # que la première pour éviter un double comptage du même montant récurrent.
     for recurring_id, amount in realized_rows:
+        if recurring_id in realized_ids:
+            continue
         total += abs(amount)
         realized_ids.add(recurring_id)
 

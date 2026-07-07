@@ -175,6 +175,35 @@ def test_recurrente_avec_match_pending_reste_en_depenses_courantes_sans_charge_p
     assert result.charges_recurrentes == Decimal("0.00")
 
 
+def test_recurrente_avec_deux_matches_confirmes_meme_recurrente_ne_double_compte_pas(db):
+    account = _add_account(db)
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction(db, account, date(2026, 1, 5), Decimal("-50.00"), label="Loyer")
+    recurring = _add_recurring(db, account, signature="loyer", amount=Decimal("-50.00"))
+    tx1 = _add_transaction(db, account, date(2026, 3, 5), Decimal("-52.00"), label="Loyer")
+    tx2 = _add_transaction(db, account, date(2026, 3, 20), Decimal("-53.00"), label="Loyer")
+    _add_match(db, recurring, tx1, status="confirmed")
+    _add_match(db, recurring, tx2, status="confirmed")
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.charges_recurrentes == Decimal("52.00")
+
+
+def test_recurrente_avec_match_rejete_reste_due_et_transaction_reste_en_depenses_courantes(db):
+    account = _add_account(db)
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction(db, account, date(2026, 1, 5), Decimal("-800.00"), label="Loyer")
+    recurring = _add_recurring(db, account, signature="loyer", amount=Decimal("-800.00"))
+    rejected_tx = _add_transaction(db, account, date(2026, 3, 5), Decimal("-800.00"), label="Loyer")
+    _add_match(db, recurring, rejected_tx, status="rejected")
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.charges_recurrentes == Decimal("800.00")
+    assert result.depenses_courantes == Decimal("800.00")
+
+
 def test_recurrente_confirmee_non_due_ne_contribue_pas(db):
     account = _add_account(db)
     _set_revenu(db, account, Decimal("1000.00"))

@@ -283,6 +283,29 @@ def test_transaction_with_confirmed_rapprochement_used_as_anchor(db):
     assert len(recurring_items) >= 1
 
 
+def test_transaction_with_rejected_rapprochement_excluded_from_anchor(db):
+    account = _add_account(db)
+    tag = _add_tag(db)
+    recurring = _add_recurring(
+        db, account.account_id, tag.tag_id, "salle de sport", "Salle de sport",
+        Decimal("-50.00"), "mensuelle",
+    )
+    transaction = _add_transaction(
+        db, account.account_id, date.today() - timedelta(days=5), Decimal("-50.00"), "Salle de sport"
+    )
+    db.add(
+        RecurringMatch(
+            recurring_id=recurring.recurring_id,
+            transaction_id=transaction.transaction_id,
+            status="rejected",
+        )
+    )
+    db.commit()
+
+    items = get_projection(account.account_id, 6, db)
+    assert items == []
+
+
 def test_split_series_fractions_in_horizon_appear_in_projection(db):
     today = date.today()
     account = _add_account(db, start_day=today.day)
