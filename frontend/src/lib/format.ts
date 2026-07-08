@@ -57,6 +57,14 @@ export function tagBreadcrumb(tag: Tag, byId: Map<number, Tag>): string {
   return breadcrumbPath(tag, byId)
 }
 
+// Renvoie `tagId` s'il désigne encore un Tag présent dans `byId`, sinon `null`.
+// Partagé par Recurrentes.tsx/Projection.tsx pour détecter au démarrage d'une
+// édition qu'un Tag référencé a été supprimé entretemps, plutôt que de laisser
+// le <select> retomber silencieusement sur une autre option.
+export function existingTagId(tagId: number | null, byId: Map<number, unknown>): number | null {
+  return tagId !== null && byId.has(tagId) ? tagId : null
+}
+
 export function formatDate(value: string): string {
   const [year, month, day] = value.split('-')
   return `${day}/${month}/${year}`

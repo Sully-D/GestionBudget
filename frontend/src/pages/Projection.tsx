@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getAccounts } from '../api/accounts'
-import type { Account } from '../api/accounts'
 import {
   createPlannedExpense,
   createPlannedExpenseSplit,
@@ -12,7 +10,8 @@ import {
 import type { PlannedExpense, ProjectionItem } from '../api/projections'
 import { getTags } from '../api/tags'
 import type { Tag } from '../api/tags'
-import { formatDate, formatMontant, tagBreadcrumb } from '../lib/format'
+import { useSelectableAccounts } from '../hooks/useSelectableAccounts'
+import { existingTagId, formatDate, formatMontant, tagBreadcrumb } from '../lib/format'
 
 const formFieldClass =
   'rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink focus:border-accent focus:outline-none'
@@ -26,10 +25,8 @@ const typeLabels: Record<ProjectionItem['type'], string> = {
 }
 
 function Projection() {
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [accountsLoaded, setAccountsLoaded] = useState(false)
-  const [accountsError, setAccountsError] = useState<string | null>(null)
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
+  const { accounts, accountsLoaded, accountsError, selectedAccountId, setSelectedAccountId } =
+    useSelectableAccounts()
 
   const [tags, setTags] = useState<Tag[]>([])
   const tagById = useMemo(() => new Map(tags.map((t) => [t.tag_id, t])), [tags])
@@ -71,45 +68,43 @@ function Projection() {
   const [projectionError, setProjectionError] = useState<string | null>(null)
 
   useEffect(() => {
-    getAccounts()
-      .then((data) => {
-        const personal = data.filter((a) => !a.is_common)
-        setAccounts(personal)
-        setSelectedAccountId((current) => current ?? personal[0]?.account_id ?? null)
-        setAccountsError(null)
-      })
-      .catch((err) => {
-        setAccountsError(err instanceof Error ? err.message : 'Erreur inattendue')
-      })
-      .finally(() => setAccountsLoaded(true))
-
     getTags().then(setTags).catch(() => undefined)
   }, [])
 
-  function refetchPlannedExpenses(accountId: number) {
+  function refetchPlannedExpenses(accountId: number, isStale?: () => boolean) {
     setPlannedExpensesLoading(true)
     return getPlannedExpenses(accountId)
       .then((data) => {
+        if (isStale?.()) return
         setPlannedExpenses(data)
         setPlannedExpensesError(null)
       })
       .catch((err) => {
+        if (isStale?.()) return
         setPlannedExpensesError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
-      .finally(() => setPlannedExpensesLoading(false))
+      .finally(() => {
+        if (isStale?.()) return
+        setPlannedExpensesLoading(false)
+      })
   }
 
-  function refetchProjection(accountId: number, horizonMonths: Horizon) {
+  function refetchProjection(accountId: number, horizonMonths: Horizon, isStale?: () => boolean) {
     setProjectionLoading(true)
     return getProjection(accountId, horizonMonths)
       .then((data) => {
+        if (isStale?.()) return
         setProjectionItems(data)
         setProjectionError(null)
       })
       .catch((err) => {
+        if (isStale?.()) return
         setProjectionError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
-      .finally(() => setProjectionLoading(false))
+      .finally(() => {
+        if (isStale?.()) return
+        setProjectionLoading(false)
+      })
   }
 
   useEffect(() => {
@@ -118,14 +113,23 @@ function Projection() {
       setProjectionItems([])
       return
     }
-    refetchPlannedExpenses(selectedAccountId)
-    refetchProjection(selectedAccountId, horizon)
+    let cancelled = false
+    const isStale = () => cancelled
+    refetchPlannedExpenses(selectedAccountId, isStale)
+    refetchProjection(selectedAccountId, horizon, isStale)
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccountId])
 
   useEffect(() => {
     if (selectedAccountId === null) return
-    refetchProjection(selectedAccountId, horizon)
+    let cancelled = false
+    refetchProjection(selectedAccountId, horizon, () => cancelled)
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [horizon])
 
@@ -240,9 +244,10 @@ function Projection() {
     setEditingId(expense.expense_id)
     setEditDate(expense.date)
     setEditAmount(String(Math.abs(expense.amount)))
-    setEditTagId(String(expense.tag_id))
+    const tagId = existingTagId(expense.tag_id, tagById)
+    setEditTagId(tagId !== null ? String(tagId) : '')
     setEditDescription(expense.description)
-    setEditError(null)
+    setEditError(tagId === null ? "Le Tag d'origine a été supprimé — veuillez en choisir un nouveau." : null)
   }
 
   async function submitEdit() {
@@ -250,6 +255,10 @@ function Projection() {
     const magnitude = Number(editAmount.replace(',', '.'))
     if (editAmount.trim() === '' || !Number.isFinite(magnitude) || magnitude <= 0) {
       setEditError('Le Montant doit être un nombre positif.')
+      return
+    }
+    if (editTagId === '') {
+      setEditError('Choisissez un Tag.')
       return
     }
     if (editDescription.trim() === '') {
@@ -527,6 +536,7 @@ function Projection() {
                       disabled={editSubmitting}
                       className={formFieldClass}
                     >
+                      <option value="">Choisir un Tag…</option>
                       {tags.map((t) => (
                         <option key={t.tag_id} value={t.tag_id}>
                           {tagBreadcrumb(t, tagById)}

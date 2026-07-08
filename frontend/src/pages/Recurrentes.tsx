@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getAccounts } from '../api/accounts'
-import type { Account } from '../api/accounts'
 import {
   confirmRapprochement,
   confirmRecurring,
@@ -20,7 +18,8 @@ import type {
 } from '../api/projections'
 import { getTags } from '../api/tags'
 import type { Tag } from '../api/tags'
-import { formatMontant, tagBreadcrumb } from '../lib/format'
+import { useSelectableAccounts } from '../hooks/useSelectableAccounts'
+import { existingTagId, formatMontant, tagBreadcrumb } from '../lib/format'
 
 const formFieldClass =
   'rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink focus:border-accent focus:outline-none'
@@ -35,10 +34,8 @@ const periodicityLabels: Record<Periodicity, string> = {
 const periodicities = Object.keys(periodicityLabels) as Periodicity[]
 
 function Recurrentes() {
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [accountsLoaded, setAccountsLoaded] = useState(false)
-  const [accountsError, setAccountsError] = useState<string | null>(null)
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
+  const { accounts, accountsLoaded, accountsError, selectedAccountId, setSelectedAccountId } =
+    useSelectableAccounts()
 
   const [tags, setTags] = useState<Tag[]>([])
   const tagById = useMemo(() => new Map(tags.map((t) => [t.tag_id, t])), [tags])
@@ -66,58 +63,61 @@ function Recurrentes() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   useEffect(() => {
-    getAccounts()
-      .then((data) => {
-        const personal = data.filter((a) => !a.is_common)
-        setAccounts(personal)
-        setSelectedAccountId((current) => current ?? personal[0]?.account_id ?? null)
-        setAccountsError(null)
-      })
-      .catch((err) => {
-        setAccountsError(err instanceof Error ? err.message : 'Erreur inattendue')
-      })
-      .finally(() => setAccountsLoaded(true))
-
     getTags().then(setTags).catch(() => undefined)
   }, [])
 
-  function refetchCandidates(accountId: number) {
+  function refetchCandidates(accountId: number, isStale?: () => boolean) {
     setCandidatesLoading(true)
     return getRecurringCandidates(accountId)
       .then((data) => {
+        if (isStale?.()) return
         setCandidates(data)
         setCandidatesError(null)
       })
       .catch((err) => {
+        if (isStale?.()) return
         setCandidatesError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
-      .finally(() => setCandidatesLoading(false))
+      .finally(() => {
+        if (isStale?.()) return
+        setCandidatesLoading(false)
+      })
   }
 
-  function refetchConfirmed(accountId: number) {
+  function refetchConfirmed(accountId: number, isStale?: () => boolean) {
     setConfirmedLoading(true)
     return getRecurringTransactions(accountId, 'confirmed')
       .then((data) => {
+        if (isStale?.()) return
         setConfirmedList(data)
         setConfirmedError(null)
       })
       .catch((err) => {
+        if (isStale?.()) return
         setConfirmedError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
-      .finally(() => setConfirmedLoading(false))
+      .finally(() => {
+        if (isStale?.()) return
+        setConfirmedLoading(false)
+      })
   }
 
-  function refetchPendingRapprochements(accountId: number) {
+  function refetchPendingRapprochements(accountId: number, isStale?: () => boolean) {
     setPendingRapprochementsLoading(true)
     return getPendingRapprochements(accountId)
       .then((data) => {
+        if (isStale?.()) return
         setPendingRapprochements(data)
         setPendingRapprochementsError(null)
       })
       .catch((err) => {
+        if (isStale?.()) return
         setPendingRapprochementsError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
-      .finally(() => setPendingRapprochementsLoading(false))
+      .finally(() => {
+        if (isStale?.()) return
+        setPendingRapprochementsLoading(false)
+      })
   }
 
   useEffect(() => {
@@ -128,9 +128,14 @@ function Recurrentes() {
       setPendingRapprochementsError(null)
       return
     }
-    refetchCandidates(selectedAccountId)
-    refetchConfirmed(selectedAccountId)
-    refetchPendingRapprochements(selectedAccountId)
+    let cancelled = false
+    const isStale = () => cancelled
+    refetchCandidates(selectedAccountId, isStale)
+    refetchConfirmed(selectedAccountId, isStale)
+    refetchPendingRapprochements(selectedAccountId, isStale)
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccountId])
 
@@ -200,8 +205,13 @@ function Recurrentes() {
     setEditingId(recurring.recurring_id)
     setEditAmount(String(Math.abs(recurring.amount)))
     setEditPeriodicity(recurring.periodicity)
-    setEditTagId(recurring.tag_id !== null ? String(recurring.tag_id) : '')
-    setEditError(null)
+    const tagId = existingTagId(recurring.tag_id, tagById)
+    setEditTagId(tagId !== null ? String(tagId) : '')
+    setEditError(
+      recurring.tag_id !== null && tagId === null
+        ? "Le Tag d'origine a été supprimé — Aucun Tag a été sélectionné à la place."
+        : null,
+    )
   }
 
   async function submitEdit() {
