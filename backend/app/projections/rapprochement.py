@@ -123,6 +123,10 @@ def reject_rapprochement(match_id: int, db: Session) -> None:
     db.commit()
 
 
+def delete_matches_for_transaction(transaction_id: int, db: Session) -> None:
+    db.query(RecurringMatch).filter(RecurringMatch.transaction_id == transaction_id).delete()
+
+
 def list_pending_rapprochements(account_id: int, db: Session) -> list[RecurringMatch]:
     _get_personal_account_or_404(account_id, db)
     return (

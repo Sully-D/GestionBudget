@@ -11,6 +11,7 @@ from app.budget.schema import BudgetTargetUpsert, RevenueSalaireUpsert
 from app.budget.service import get_tag_tracking, upsert_budget_target, upsert_salaire
 from app.core.db import Base
 from app.tags.model import Tag
+from app.tags.service import delete_tag
 from app.transactions.model import Transaction, TransactionTag
 
 
@@ -222,23 +223,19 @@ def test_transaction_tagged_with_both_ancestor_and_descendant_counts_once(db):
     assert by_id[child.tag_id].spent == Decimal("40.00")
 
 
-def test_target_referencing_deleted_tag_is_ignored(db):
+def test_deleting_tag_referenced_by_target_raises_422(db):
     account = _add_account(db)
     tag = _add_tag(db)
-    today = date.today()
-    period_start = _current_period_start(today)
     upsert_budget_target(
         BudgetTargetUpsert(account_id=account.account_id, tag_id=tag.tag_id, percentage=Decimal("20.00")),
         db,
     )
-    # Simule un tag supprimé alors qu'une Cible le référence encore (delete_tag
-    # ne garde-fou pas contre ce cas et SQLite n'impose pas les FK par défaut).
-    db.query(Tag).filter(Tag.tag_id == tag.tag_id).delete()
-    db.commit()
 
-    result = get_tag_tracking(account.account_id, period_start, db)
+    with pytest.raises(HTTPException) as exc_info:
+        delete_tag(tag.tag_id, db)
 
-    assert all(r.tag_id != tag.tag_id for r in result)
+    assert exc_info.value.status_code == 422
+    assert db.get(Tag, tag.tag_id) is not None
 
 
 def test_common_account_returns_422(db):

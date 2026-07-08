@@ -186,7 +186,7 @@ def test_get_pending_rapprochements_unknown_account_returns_404(client):
     assert isinstance(response.json()["detail"], str)
 
 
-def test_get_pending_rapprochements_skips_orphaned_match_without_crashing(client):
+def test_deleting_transaction_with_pending_match_removes_it_from_pending(client):
     account_id = _account_id(client)
     _confirm_recurring(client, account_id)
     client.post(
@@ -202,16 +202,11 @@ def test_get_pending_rapprochements_skips_orphaned_match_without_crashing(client
         "/rapprochement/pending", params={"account_id": account_id}
     ).json()["data"][0]["transaction_id"]
 
-    session = next(app.dependency_overrides[get_db]())
-    try:
-        session.delete(session.get(Transaction, transaction_id))
-        session.commit()
-    finally:
-        session.close()
-
-    response = client.get("/rapprochement/pending", params={"account_id": account_id})
+    response = client.delete(f"/transactions/{transaction_id}")
     assert response.status_code == 200
-    assert response.json()["data"] == []
+
+    pending_after = client.get("/rapprochement/pending", params={"account_id": account_id})
+    assert pending_after.json()["data"] == []
 
 
 def test_post_transaction_without_match_creates_no_rapprochement(client):

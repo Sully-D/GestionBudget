@@ -225,6 +225,7 @@ def update_recurring(
 
 def delete_recurring(recurring_id: int, db: Session) -> None:
     recurring = _get_recurring_or_404(recurring_id, db)
+    db.query(RecurringMatch).filter(RecurringMatch.recurring_id == recurring_id).delete()
     db.delete(recurring)
     db.commit()
 

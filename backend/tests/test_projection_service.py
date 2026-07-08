@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -11,6 +12,7 @@ from app.projections.model import PlannedExpense, RecurringMatch, RecurringTrans
 from app.projections.schema import PlannedExpenseSplitCreate
 from app.projections.service import create_planned_expense_split, get_projection
 from app.tags.model import Tag
+from app.tags.service import delete_tag
 from app.transactions.model import Transaction
 
 
@@ -181,7 +183,7 @@ def test_recurring_without_matching_transaction_excluded_without_exception(db):
     assert items == []
 
 
-def test_recurring_tag_deleted_returns_none_tag_without_exception(db):
+def test_deleting_tag_referenced_by_recurring_raises_422(db):
     account = _add_account(db)
     tag = _add_tag(db)
     today = date.today()
@@ -190,11 +192,12 @@ def test_recurring_tag_deleted_returns_none_tag_without_exception(db):
         db, account.account_id, tag.tag_id, "salle", "Salle",
         Decimal("-50.00"), "mensuelle",
     )
-    db.delete(tag)
-    db.commit()
-    items = get_projection(account.account_id, 6, db)
-    assert len(items) >= 1
-    assert all(i.tag_id is None and i.tag_name is None for i in items)
+
+    with pytest.raises(HTTPException) as exc_info:
+        delete_tag(tag.tag_id, db)
+
+    assert exc_info.value.status_code == 422
+    assert db.get(Tag, tag.tag_id) is not None
 
 
 def test_projection_sorted_deterministically_by_date_type_label(db):

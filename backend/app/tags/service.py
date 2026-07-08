@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.tags.model import MAX_LEVEL, Rule, Tag
@@ -54,7 +55,15 @@ def delete_tag(tag_id: int, db: Session) -> None:
     if has_children:
         raise HTTPException(status_code=422, detail="Supprimez d'abord les tags enfants")
     db.delete(tag)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail="Tag utilisé par d'autres données (transactions, règles, cibles, "
+            "récurrentes ou dépenses planifiées) — impossible de le supprimer",
+        ) from None
 
 
 def list_rules(db: Session) -> list[Rule]:

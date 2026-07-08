@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import get_db
-from app.projections.rapprochement import propose_if_match
+from app.projections.rapprochement import delete_matches_for_transaction, propose_if_match
 from app.transactions.schema import (
     TransactionCreate,
     TransactionRead,
@@ -112,6 +112,7 @@ def put_transaction(
 
 @router.delete("/{transaction_id:int}")
 def delete_transaction_endpoint(transaction_id: int, db: Session = Depends(get_db)):
+    delete_matches_for_transaction(transaction_id, db)
     delete_transaction(transaction_id, db)
     return {"data": None}
 
