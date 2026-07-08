@@ -4,10 +4,23 @@ import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
 import { getDisponible, getTagSpending, getTagTracking } from '../api/budget'
 import type { Disponible, TagSpending, TagTracking } from '../api/budget'
+import { getProjection } from '../api/projections'
+import type { ProjectionItem } from '../api/projections'
 import { getTransactions } from '../api/transactions'
 import type { Transaction } from '../api/transactions'
 import AccountCard from '../components/AccountCard'
 import { breadcrumbPath, buildSpendingRows, formatDate, formatMontant, formatPourcentage, shiftDate } from '../lib/format'
+
+const formFieldClass =
+  'rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink focus:border-accent focus:outline-none'
+
+const horizons = [1, 3, 6] as const
+type Horizon = (typeof horizons)[number]
+
+const typeLabels: Record<ProjectionItem['type'], string> = {
+  recurrente: 'Récurrente',
+  planifiee: 'Planifiée',
+}
 
 type TagStatus = 'ok' | 'warn' | 'over'
 
@@ -109,6 +122,11 @@ function Dashboard() {
   const [tagSpending, setTagSpending] = useState<TagSpending[]>([])
   const [tagSpendingLoading, setTagSpendingLoading] = useState(false)
   const [tagSpendingError, setTagSpendingError] = useState<string | null>(null)
+
+  const [horizon, setHorizon] = useState<Horizon>(3)
+  const [projectionItems, setProjectionItems] = useState<ProjectionItem[]>([])
+  const [projectionLoading, setProjectionLoading] = useState(false)
+  const [projectionError, setProjectionError] = useState<string | null>(null)
 
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [transactionsLoading, setTransactionsLoading] = useState(false)
@@ -224,6 +242,40 @@ function Dashboard() {
       cancelled = true
     }
   }, [selectedAccount, referenceDate])
+
+  // La Projection est ancrée sur `date.today()` côté serveur (jamais sur la
+  // Période affichée) : ses dépendances excluent volontairement `referenceDate`
+  // pour ne pas la refaire fetcher ni la faire disparaître quand on navigue vers
+  // une Période archivée via les chevrons (Story 6.3).
+  useEffect(() => {
+    if (!selectedAccount || selectedAccount.is_common) {
+      setProjectionItems([])
+      setProjectionError(null)
+      setProjectionLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    setProjectionLoading(true)
+    getProjection(selectedAccount.account_id, horizon)
+      .then((data) => {
+        if (!cancelled) {
+          setProjectionItems(data)
+          setProjectionError(null)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setProjectionError(err instanceof Error ? err.message : 'Erreur inattendue')
+      })
+      .finally(() => {
+        if (!cancelled) setProjectionLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAccount, horizon])
 
   const enrichedTagRows = buildEnrichedRows(tagTracking, disponible ? disponible.revenus : null)
   const enrichedSpendingRows = buildSpendingRows(tagSpending)
@@ -465,6 +517,60 @@ function Dashboard() {
                 ))}
               </div>
             </>
+          )}
+        </section>
+      )}
+
+      {/* Projection de trésorerie (FR-32) — Comptes personnels uniquement (même garde
+          que Disponible, `get_projection` 422 sur le Compte Commun). Vue en lecture seule
+          de la même donnée que /projection ; la gestion des Dépenses planifiées reste sur
+          cette page dédiée. */}
+      {selectedAccount && !selectedAccount.is_common && (
+        <section className="mt-8">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-label uppercase text-ink-muted">Projection</h2>
+            <select
+              value={horizon}
+              onChange={(e) => setHorizon(Number(e.target.value) as Horizon)}
+              className={formFieldClass}
+            >
+              {horizons.map((h) => (
+                <option key={h} value={h}>
+                  {h} mois
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {projectionError && <p className="mt-2 text-body text-alert">{projectionError}</p>}
+
+          {projectionLoading && projectionItems.length === 0 && !projectionError && (
+            <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
+          )}
+
+          {!projectionLoading && !projectionError && projectionItems.length === 0 && (
+            <p className="mt-2 text-body text-ink-muted">Aucun élément dans cet horizon.</p>
+          )}
+
+          {projectionItems.length > 0 && (
+            <div className="mt-4 overflow-hidden rounded border border-border">
+              {projectionItems.map((item, index) => (
+                <div
+                  key={`${item.date}-${item.type}-${item.label}-${index}`}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle px-4 py-2 first:border-t-0"
+                  aria-label={`${item.label}, ${formatDate(item.date)}, ${typeLabels[item.type]}${item.tag_name !== null ? `, ${item.tag_name}` : ''}, ${formatMontant(item.amount)}`}
+                >
+                  <div>
+                    <p className="text-body-strong text-ink">{item.label}</p>
+                    <p className="text-caption text-ink-muted">
+                      {formatDate(item.date)} · {typeLabels[item.type]}
+                      {item.tag_name !== null ? ` · ${item.tag_name}` : ''}
+                    </p>
+                  </div>
+                  <p className="font-mono text-body-strong text-ink">{formatMontant(item.amount)}</p>
+                </div>
+              ))}
+            </div>
           )}
         </section>
       )}
