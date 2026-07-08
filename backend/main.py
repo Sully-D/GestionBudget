@@ -9,6 +9,7 @@ from app.budget.spending_router import router as budget_spending_router
 from app.budget.targets_router import router as budget_targets_router
 from app.budget.tracking_router import router as budget_tracking_router
 from app.core.config import settings
+from app.export.router import router as export_router
 from app.import_pipeline.router import router as import_router
 from app.projections.planned_expenses_router import router as planned_expenses_router
 from app.projections.projection_router import router as projection_router
@@ -51,5 +52,6 @@ app.include_router(projections_router)
 app.include_router(planned_expenses_router)
 app.include_router(projection_router)
 app.include_router(rapprochement_router)
+app.include_router(export_router)
 
 app.frontend("/", directory=settings.frontend_dist_dir, fallback="index.html")

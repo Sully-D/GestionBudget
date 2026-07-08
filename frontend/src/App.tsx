@@ -3,6 +3,7 @@ import Budget from './pages/Budget'
 import Comparaison from './pages/Comparaison'
 import Comptes from './pages/Comptes'
 import Dashboard from './pages/Dashboard'
+import Export from './pages/Export'
 import Import from './pages/Import'
 import ModifierTransaction from './pages/ModifierTransaction'
 import NouvelleTransaction from './pages/NouvelleTransaction'
@@ -39,6 +40,9 @@ function App() {
           <Link to="/comparaison" className="text-body text-ink-muted hover:text-ink">
             Comparaison
           </Link>
+          <Link to="/export" className="text-body text-ink-muted hover:text-ink">
+            Export
+          </Link>
           <Link
             to="/transactions/nouvelle"
             className="rounded-lg bg-accent px-3 py-1.5 text-body-strong text-surface"
@@ -58,6 +62,7 @@ function App() {
         <Route path="/recurrentes" element={<Recurrentes />} />
         <Route path="/projection" element={<Projection />} />
         <Route path="/comparaison" element={<Comparaison />} />
+        <Route path="/export" element={<Export />} />
       </Routes>
     </div>
   )
