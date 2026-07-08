@@ -389,6 +389,32 @@ def _anchor_date_for_signature(
     return max(matching_dates)
 
 
+def _anchor_dates_by_signature(account_id: int, db: Session) -> dict[str, date]:
+    # Équivalent batch de _anchor_date_for_signature (sans exclude_transaction_id) :
+    # un seul scan des Transactions + un seul scan des Rapprochements exclus pour
+    # calculer l'ancre de toutes les signatures d'un coup, au lieu d'un scan complet
+    # par Récurrente confirmée (N+1, cf. spec-recurring-anchor-n-plus-one.md).
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.account_id == account_id, Transaction.amount < 0)
+        .all()
+    )
+    excluded_transaction_ids = {
+        row.transaction_id
+        for row in db.query(RecurringMatch.transaction_id)
+        .filter(RecurringMatch.status.in_(["pending", "rejected"]))
+        .all()
+    }
+    anchors: dict[str, date] = {}
+    for transaction in transactions:
+        if transaction.transaction_id in excluded_transaction_ids:
+            continue
+        signature = _signature_for_transaction(transaction)
+        if signature not in anchors or transaction.date > anchors[signature]:
+            anchors[signature] = transaction.date
+    return anchors
+
+
 def _recurring_occurrences_in_horizon(
     anchor: date, periodicity: str, today: date, horizon_end: date
 ) -> list[date]:
@@ -452,8 +478,9 @@ def get_projection(
         )
         .all()
     )
+    anchors = _anchor_dates_by_signature(account_id, db)
     for recurring in recurring_transactions:
-        anchor = _anchor_date_for_signature(account_id, recurring.signature, db)
+        anchor = anchors.get(recurring.signature)
         if anchor is None:
             continue
         occurrences = _recurring_occurrences_in_horizon(

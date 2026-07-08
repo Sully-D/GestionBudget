@@ -385,30 +385,32 @@ def _advance_recurring_date(current: date, periodicity: str) -> date:
     return add_months(current, RECURRING_PERIODICITY_MONTHS[periodicity])
 
 
-def _recurring_anchor_date(account_id: int, signature: str, db: Session) -> date | None:
+def _recurring_anchor_dates_by_signature(account_id: int, db: Session) -> dict[str, date]:
+    # Un seul scan des Transactions + un seul scan des Rapprochements exclus pour
+    # calculer l'ancre de toutes les signatures d'un coup, au lieu d'un scan complet
+    # par Récurrente confirmée (N+1, cf. spec-recurring-anchor-n-plus-one.md). Une
+    # Transaction `pending` n'est pas encore décidée par l'utilisateur, une Transaction
+    # `rejected` a été explicitement écartée comme n'étant pas cette Récurrente : ni
+    # l'une ni l'autre ne doit servir d'ancre (cf. projections/service.py).
     transactions = (
         db.query(Transaction)
         .filter(Transaction.account_id == account_id, Transaction.amount < 0)
         .all()
     )
-    # Une Transaction `pending` n'est pas encore décidée par l'utilisateur, une
-    # Transaction `rejected` a été explicitement écartée comme n'étant pas cette
-    # Récurrente : ni l'une ni l'autre ne doit servir d'ancre (cf. projections/service.py).
     excluded_transaction_ids = {
         row.transaction_id
         for row in db.query(RecurringMatch.transaction_id)
         .filter(RecurringMatch.status.in_(["pending", "rejected"]))
         .all()
     }
-    matching_dates = [
-        transaction.date
-        for transaction in transactions
-        if _signature_for_transaction(transaction) == signature
-        and transaction.transaction_id not in excluded_transaction_ids
-    ]
-    if not matching_dates:
-        return None
-    return max(matching_dates)
+    anchors: dict[str, date] = {}
+    for transaction in transactions:
+        if transaction.transaction_id in excluded_transaction_ids:
+            continue
+        signature = _signature_for_transaction(transaction)
+        if signature not in anchors or transaction.date > anchors[signature]:
+            anchors[signature] = transaction.date
+    return anchors
 
 
 def _is_recurring_due_in_period(
@@ -486,10 +488,11 @@ def _charges_recurrentes_for_period(
         .all()
     }
 
+    anchors = _recurring_anchor_dates_by_signature(account_id, db)
     for recurring in confirmed_recurring:
         if recurring.recurring_id in matched_ids_in_period:
             continue
-        anchor = _recurring_anchor_date(account_id, recurring.signature, db)
+        anchor = anchors.get(recurring.signature)
         if anchor is None:
             continue
         if _is_recurring_due_in_period(anchor, recurring.periodicity, period_start, period_end):
