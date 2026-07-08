@@ -105,6 +105,46 @@ def test_put_account_reference_balance_null_with_date_returns_422(client):
     assert response.status_code == 422
 
 
+def test_get_account_balance_as_of_returns_balance_for_personal_account(client):
+    accounts = client.get("/accounts").json()["data"]
+    account_id = next(a["account_id"] for a in accounts if a["name"] == "Personnel-Lui")
+    response = client.get(f"/accounts/{account_id}/balance", params={"as_of": "2026-06-30"})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data == {"account_id": account_id, "as_of": "2026-06-30", "balance": 0.0}
+
+
+def test_get_account_balance_as_of_returns_balance_for_common_account(client):
+    accounts = client.get("/accounts").json()["data"]
+    account_id = next(a["account_id"] for a in accounts if a["name"] == "Commun")
+    response = client.get(f"/accounts/{account_id}/balance", params={"as_of": "2026-06-30"})
+    assert response.status_code == 200
+    assert response.json()["data"]["balance"] == 0.0
+
+
+def test_get_account_balance_as_of_not_found_returns_404(client):
+    response = client.get("/accounts/999/balance", params={"as_of": "2026-06-30"})
+    assert response.status_code == 404
+
+
+def test_get_account_balance_without_as_of_returns_422(client):
+    accounts = client.get("/accounts").json()["data"]
+    account_id = accounts[0]["account_id"]
+    response = client.get(f"/accounts/{account_id}/balance")
+    assert response.status_code == 422
+
+
+def test_get_account_balance_as_of_before_reference_date_returns_422(client):
+    accounts = client.get("/accounts").json()["data"]
+    account_id = accounts[0]["account_id"]
+    client.put(
+        f"/accounts/{account_id}",
+        json={"reference_balance": 100.00, "reference_date": "2026-07-01"},
+    )
+    response = client.get(f"/accounts/{account_id}/balance", params={"as_of": "2026-06-30"})
+    assert response.status_code == 422
+
+
 def test_put_account_valid_update_recomputes_balance_and_period(client):
     accounts = client.get("/accounts").json()["data"]
     account_id = accounts[0]["account_id"]

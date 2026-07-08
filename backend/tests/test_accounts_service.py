@@ -109,3 +109,67 @@ def test_compute_period_defaults_to_today_when_no_reference_date_given():
     period_start, period_end = compute_period(account)
     today = date.today()
     assert period_start <= today <= period_end
+
+
+def test_compute_balance_as_of_date_excludes_transactions_after_it(db):
+    account = _add_account(
+        db, reference_balance=Decimal("100.00"), reference_date=date(2026, 6, 25)
+    )
+    db.add_all(
+        [
+            Transaction(
+                account_id=account.account_id,
+                date=date(2026, 6, 30),
+                amount=Decimal("-20.00"),
+                label="Incluse",
+            ),
+            Transaction(
+                account_id=account.account_id,
+                date=date(2026, 7, 10),
+                amount=Decimal("-1000.00"),
+                label="Après as_of_date, exclue",
+            ),
+        ]
+    )
+    db.commit()
+    assert compute_balance(account, db, as_of_date=date(2026, 7, 5)) == Decimal("80.00")
+
+
+def test_compute_balance_as_of_date_inclusive_of_matching_date(db):
+    account = _add_account(
+        db, reference_balance=Decimal("0.00"), reference_date=date(2026, 7, 1)
+    )
+    db.add(
+        Transaction(
+            account_id=account.account_id,
+            date=date(2026, 7, 5),
+            amount=Decimal("-20.00"),
+            label="Le jour même de as_of_date, incluse",
+        )
+    )
+    db.commit()
+    assert compute_balance(account, db, as_of_date=date(2026, 7, 5)) == Decimal("-20.00")
+
+
+def test_compute_balance_as_of_date_none_matches_unbounded_behaviour(db):
+    account = _add_account(
+        db, reference_balance=Decimal("100.00"), reference_date=date(2026, 7, 5)
+    )
+    db.add_all(
+        [
+            Transaction(
+                account_id=account.account_id,
+                date=date(2026, 7, 4),
+                amount=Decimal("-1000.00"),
+                label="Avant la référence, exclue",
+            ),
+            Transaction(
+                account_id=account.account_id,
+                date=date(2026, 7, 6),
+                amount=Decimal("50.00"),
+                label="Après la référence, incluse",
+            ),
+        ]
+    )
+    db.commit()
+    assert compute_balance(account, db, as_of_date=None) == compute_balance(account, db)

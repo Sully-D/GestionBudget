@@ -1,3 +1,4 @@
+import type { TagSpending } from '../api/budget'
 import type { RuleConditionType } from '../api/rules'
 import type { Tag } from '../api/tags'
 
@@ -69,4 +70,23 @@ export function shiftDate(value: string, days: number): string {
   const shiftedMonth = String(date.getMonth() + 1).padStart(2, '0')
   const shiftedDay = String(date.getDate()).padStart(2, '0')
   return `${shiftedYear}-${shiftedMonth}-${shiftedDay}`
+}
+
+export interface EnrichedSpendingRow {
+  row: TagSpending
+  label: string
+}
+
+// Répartition par Tag sans Cible (`TagSpending`, jamais `TagTracking`) : reconstruit
+// le breadcrumb depuis une map locale tag_id -> {name, parent_id}. Partagée par
+// Dashboard.tsx (Compte Commun) et Comparaison.tsx (les deux colonnes) — 3e/4e
+// occurrence de ce calcul, extraite ici plutôt que redupliquée (Story 6.3 [Review][Defer]).
+export function buildSpendingRows(tagSpending: TagSpending[]): EnrichedSpendingRow[] {
+  const tagById = new Map<number, { tag_id: number; name: string; parent_id: number | null }>(
+    tagSpending.map((r) => [r.tag_id, { tag_id: r.tag_id, name: r.tag_name, parent_id: r.parent_id }]),
+  )
+  return tagSpending.map((row) => ({
+    row,
+    label: breadcrumbPath({ tag_id: row.tag_id, name: row.tag_name, parent_id: row.parent_id }, tagById),
+  }))
 }

@@ -1,5 +1,6 @@
 import { Link, Route, Routes } from 'react-router'
 import Budget from './pages/Budget'
+import Comparaison from './pages/Comparaison'
 import Comptes from './pages/Comptes'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
@@ -35,6 +36,9 @@ function App() {
           <Link to="/projection" className="text-body text-ink-muted hover:text-ink">
             Projection
           </Link>
+          <Link to="/comparaison" className="text-body text-ink-muted hover:text-ink">
+            Comparaison
+          </Link>
           <Link
             to="/transactions/nouvelle"
             className="rounded-lg bg-accent px-3 py-1.5 text-body-strong text-surface"
@@ -53,6 +57,7 @@ function App() {
         <Route path="/budget" element={<Budget />} />
         <Route path="/recurrentes" element={<Recurrentes />} />
         <Route path="/projection" element={<Projection />} />
+        <Route path="/comparaison" element={<Comparaison />} />
       </Routes>
     </div>
   )

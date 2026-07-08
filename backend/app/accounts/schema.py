@@ -24,6 +24,16 @@ class AccountRead(BaseModel):
         return float(value) if value is not None else None
 
 
+class AccountBalanceRead(BaseModel):
+    account_id: int
+    as_of: date
+    balance: Decimal
+
+    @field_serializer("balance", when_used="json")
+    def _serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
+
+
 class AccountUpdate(BaseModel):
     start_day: int | None = Field(default=None, ge=1, le=28)
     reference_balance: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)

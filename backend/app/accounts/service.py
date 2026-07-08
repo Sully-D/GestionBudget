@@ -9,13 +9,17 @@ from app.core.period import period_for
 from app.transactions.model import Transaction
 
 
-def compute_balance(account: Account, db: Session) -> Decimal:
+def compute_balance(
+    account: Account, db: Session, as_of_date: date | None = None
+) -> Decimal:
     base = account.reference_balance if account.reference_balance is not None else Decimal("0.00")
     query = db.query(func.sum(Transaction.amount)).filter(
         Transaction.account_id == account.account_id
     )
     if account.reference_date is not None:
         query = query.filter(Transaction.date >= account.reference_date)
+    if as_of_date is not None:
+        query = query.filter(Transaction.date <= as_of_date)
     total = query.scalar() or Decimal("0.00")
     return base + total
 

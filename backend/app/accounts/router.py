@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
-from app.accounts.schema import AccountRead, AccountUpdate
+from app.accounts.schema import AccountBalanceRead, AccountRead, AccountUpdate
 from app.accounts.service import compute_balance, compute_period
 from app.core.db import get_db
 
@@ -42,6 +44,24 @@ def list_accounts(db: Session = Depends(get_db)):
 def get_account(account_id: int, db: Session = Depends(get_db)):
     account = _get_account_or_404(account_id, db)
     return {"data": _to_read(account, db)}
+
+
+@router.get("/{account_id}/balance")
+def get_account_balance(
+    account_id: int,
+    as_of: date = Query(...),
+    db: Session = Depends(get_db),
+):
+    account = _get_account_or_404(account_id, db)
+    if account.reference_date is not None and as_of < account.reference_date:
+        raise HTTPException(
+            status_code=422,
+            detail="as_of ne peut pas être antérieur à la date de référence du Compte",
+        )
+    balance = compute_balance(account, db, as_of_date=as_of)
+    return {
+        "data": AccountBalanceRead(account_id=account_id, as_of=as_of, balance=balance)
+    }
 
 
 @router.put("/{account_id}")

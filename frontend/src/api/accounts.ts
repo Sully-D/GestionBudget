@@ -34,3 +34,18 @@ export async function updateAccount(
   })
   return unwrap<Account>(response)
 }
+
+export interface AccountBalanceAsOf {
+  account_id: number
+  as_of: string
+  balance: number
+}
+
+export async function getAccountBalanceAsOf(
+  accountId: number,
+  asOf: string,
+): Promise<AccountBalanceAsOf> {
+  const params = new URLSearchParams({ as_of: asOf })
+  const response = await fetch(`/accounts/${accountId}/balance?${params.toString()}`)
+  return unwrap<AccountBalanceAsOf>(response)
+}

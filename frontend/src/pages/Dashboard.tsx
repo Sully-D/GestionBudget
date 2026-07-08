@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
 import { getDisponible, getTagSpending, getTagTracking } from '../api/budget'
@@ -6,7 +7,7 @@ import type { Disponible, TagSpending, TagTracking } from '../api/budget'
 import { getTransactions } from '../api/transactions'
 import type { Transaction } from '../api/transactions'
 import AccountCard from '../components/AccountCard'
-import { breadcrumbPath, formatDate, formatMontant, formatPourcentage, shiftDate } from '../lib/format'
+import { breadcrumbPath, buildSpendingRows, formatDate, formatMontant, formatPourcentage, shiftDate } from '../lib/format'
 
 type TagStatus = 'ok' | 'warn' | 'over'
 
@@ -22,11 +23,6 @@ interface EnrichedTagRow {
   pctRevenus: number | null
   status: TagStatus | null
   ratio: number
-}
-
-interface EnrichedSpendingRow {
-  row: TagSpending
-  label: string
 }
 
 // Seuils confirmés EXPERIENCE.md : OK < 90 %, proche (warn) 90-99 %, dépassement (over) >= 100 %.
@@ -93,19 +89,6 @@ function buildEnrichedRows(tagTracking: TagTracking[], revenus: number | null): 
       ratio,
     }
   })
-}
-
-// Répartition par Tag du Compte Commun (AC #3, sans Cible) : même reconstruction
-// de breadcrumb locale que `buildEnrichedRows`, sans statut/barre/cible — cette
-// forme (`TagSpending`) n'en a jamais.
-function buildSpendingRows(tagSpending: TagSpending[]): EnrichedSpendingRow[] {
-  const tagById = new Map<number, TrackingTagRef>(
-    tagSpending.map((r) => [r.tag_id, { tag_id: r.tag_id, name: r.tag_name, parent_id: r.parent_id }]),
-  )
-  return tagSpending.map((row) => ({
-    row,
-    label: breadcrumbPath({ tag_id: row.tag_id, name: row.tag_name, parent_id: row.parent_id }, tagById),
-  }))
 }
 
 function Dashboard() {
@@ -678,6 +661,9 @@ function Dashboard() {
           >
             Période en cours
           </button>
+          <Link to="/comparaison" className="rounded border border-border px-3 py-1 text-body text-accent">
+            Comparer
+          </Link>
         </div>
       )}
 
