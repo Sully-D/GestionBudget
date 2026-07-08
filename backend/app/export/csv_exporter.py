@@ -33,14 +33,17 @@ def _sanitize_cell(value: object) -> object:
     return value
 
 
-def export_to_csv(data: ExportedData) -> str:
+def export_to_csv(data: ExportedData, omit_empty_sections: bool = False) -> str:
     buffer = io.StringIO()
 
     for title, fieldnames, attr in _SECTIONS:
+        items = getattr(data, attr)
+        if omit_empty_sections and not items and attr != "transactions":
+            continue
         buffer.write(f"# === {title} ===\n")
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)
         writer.writeheader()
-        for item in getattr(data, attr):
+        for item in items:
             row = item.model_dump()
             if isinstance(row.get("tags"), list):
                 row["tags"] = ";".join(t.replace(";", ",") for t in row["tags"])

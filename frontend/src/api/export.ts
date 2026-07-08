@@ -29,3 +29,15 @@ async function triggerDownload(url: string): Promise<void> {
 export async function downloadFullExport(format: 'json' | 'csv'): Promise<void> {
   await triggerDownload(`/export/full?format=${format}`)
 }
+
+export async function downloadFilteredExport(
+  accountId: number,
+  format: 'json' | 'csv',
+  periodStart?: string,
+  periodEnd?: string,
+): Promise<void> {
+  const params = new URLSearchParams({ account_id: String(accountId), format })
+  if (periodStart) params.set('period_start', periodStart)
+  if (periodEnd) params.set('period_end', periodEnd)
+  await triggerDownload(`/export/filtered?${params.toString()}`)
+}

@@ -1,6 +1,10 @@
+from datetime import date
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
 from app.accounts.model import Account
+from app.accounts.service import compute_period
 from app.budget.model import BudgetTarget, Revenue
 from app.export.schema import (
     BudgetTargetExport,
@@ -131,3 +135,64 @@ def build_full_export(db: Session) -> ExportedData:
             for r in revenues
         ],
     )
+
+
+def build_filtered_export(
+    account_id: int,
+    period_start: date | None,
+    period_end: date | None,
+    reference_date: date | None,
+    db: Session,
+) -> tuple[ExportedData, str, date, date]:
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
+
+    if (period_start is None) != (period_end is None):
+        raise HTTPException(
+            status_code=422,
+            detail="period_start et period_end doivent être fournis ensemble",
+        )
+
+    if period_start is None and period_end is None:
+        period_start, period_end = compute_period(account, reference_date)
+    elif period_start > period_end:
+        raise HTTPException(
+            status_code=422,
+            detail="period_start doit être antérieur ou égal à period_end",
+        )
+
+    tags = db.query(Tag).order_by(Tag.tag_id).all()
+    tags_by_id = {tag.tag_id: tag for tag in tags}
+
+    transactions = (
+        db.query(Transaction)
+        .options(selectinload(Transaction.tags))
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+        )
+        .order_by(Transaction.date, Transaction.transaction_id)
+        .all()
+    )
+
+    data = ExportedData(
+        transactions=[
+            TransactionExport(
+                date=t.date,
+                amount=t.amount,
+                label=t.label,
+                payee=t.payee,
+                account=account.name,
+                tags=[
+                    path
+                    for tag in t.tags
+                    if (path := _tag_path(tag.tag_id, tags_by_id)) is not None
+                ],
+                fitid=t.fitid,
+            )
+            for t in transactions
+        ],
+    )
+    return data, account.name, period_start, period_end
