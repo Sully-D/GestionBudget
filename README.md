@@ -4,6 +4,18 @@ Application web self-hosted de gestion budgétaire personnelle, pour un foyer av
 
 Conçue pour tourner en local sur un NAS ou un Raspberry Pi, sans authentification (réseau local uniquement).
 
+## Fonctionnalités
+
+- **Comptes** — comptes personnels + compte commun, période budgétaire glissante configurable (jour de départ), solde calculé
+- **Transactions** — saisie manuelle, import OFX (dédoublonné par FITID) et CSV (mappage visuel des colonnes)
+- **Tags** — hiérarchie sur 3 niveaux, moteur de règles d'auto-tagging (suggestion à la saisie)
+- **Budget** — cibles par tag en % du salaire, suivi réel vs cible, Disponible calculé côté serveur
+- **Projections** — détection des charges récurrentes, rapprochement automatique, dépenses planifiées (simples ou ventilées sur plusieurs périodes), horizon de trésorerie 1/3/6 mois
+- **Dashboard** — vue Disponible, répartition par tag, comparaison entre deux périodes
+- **Export** — JSON/CSV, complet ou filtré par compte et période
+
+Projet feature-complete (7 epics livrés). Détail fonctionnel et technique complet dans [`docs/`](./docs/index.md).
+
 ## Prérequis
 
 - **Docker** (Engine 27+)
@@ -43,7 +55,13 @@ docker compose down
 
 (les données restent dans le volume ; ajoutez `-v` uniquement si vous souhaitez les supprimer)
 
+## Documentation
+
+Documentation technique complète (architecture, schéma de données, contrats API, inventaire frontend, guides dev/déploiement) : [`docs/index.md`](./docs/index.md).
+
 ## Développeurs
+
+Quickstart ci-dessous ; guide complet (tests, conventions, ajout d'une règle d'auto-tagging, migrations) : [`docs/development-guide.md`](./docs/development-guide.md).
 
 ### Prérequis de développement
 

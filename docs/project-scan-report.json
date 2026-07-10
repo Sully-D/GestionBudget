@@ -1,0 +1,45 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-07-10T00:00:00Z",
+    "last_updated": "2026-07-10T00:00:00Z",
+    "completed": "2026-07-10T00:00:00Z"
+  },
+  "mode": "initial_scan",
+  "scan_level": "deep",
+  "project_root": "/home/sdl/Programmation/GestionDuBudget",
+  "project_knowledge": "/home/sdl/Programmation/GestionDuBudget/docs",
+  "repository_type": "monolith",
+  "project_parts": [
+    { "part_id": "backend", "root_path": "backend/", "project_type_id": "backend", "display_name": "FastAPI + SQLAlchemy + SQLite API" },
+    { "part_id": "frontend", "root_path": "frontend/", "project_type_id": "web", "display_name": "React + TypeScript SPA" }
+  ],
+  "completed_steps": [
+    { "step": "step_1", "status": "completed", "summary": "Classified as monolith with 2 parts (backend FastAPI, frontend React)" },
+    { "step": "step_2", "status": "completed", "summary": "Found 3 existing docs: README.md, frontend/README.md (default Vite template), ARCHITECTURE-SPINE.md" },
+    { "step": "step_3", "status": "completed", "summary": "Tech stack: FastAPI/SQLAlchemy on Python; React/Vite/Tailwind on TypeScript" },
+    { "step": "step_4", "status": "completed", "summary": "API: 40+ endpoints across 8 backend modules documented; Data: 10 tables documented; Components: 11 pages + 7 components documented" },
+    { "step": "step_5", "status": "completed", "summary": "Source tree documented" },
+    { "step": "step_6", "status": "completed", "summary": "Dev/deployment guides written" },
+    { "step": "step_7", "status": "completed", "summary": "2 integration points documented (SPA fallback via app.frontend(), REST API envelope)" },
+    { "step": "step_8", "status": "completed", "summary": "Architecture doc written (single architecture.md covering both parts, monolith deployment)" },
+    { "step": "step_9", "status": "completed", "summary": "All supporting docs written" },
+    { "step": "step_10", "status": "completed", "summary": "Master index generated" },
+    { "step": "step_11", "status": "completed", "summary": "Validation complete, no incomplete markers" },
+    { "step": "step_12", "status": "completed", "summary": "Workflow complete, README.md also refreshed" }
+  ],
+  "current_step": "completed",
+  "outputs_generated": [
+    "index.md",
+    "project-overview.md",
+    "architecture.md",
+    "source-tree-analysis.md",
+    "data-models.md",
+    "api-contracts.md",
+    "component-inventory.md",
+    "development-guide.md",
+    "deployment-guide.md",
+    "project-scan-report.json"
+  ],
+  "resume_instructions": "Workflow complete. Re-run bmad-document-project and select 'Re-scan entire project' to refresh after significant code changes."
+}
