@@ -110,6 +110,34 @@ class TagSpendingRead(BaseModel):
         return float(value)
 
 
+class RepartitionCommuneAccountPart(BaseModel):
+    account_id: int
+    account_name: str
+    period_start: date
+    period_end: date
+    revenus: Decimal
+    charges: Decimal
+    reste_a_vivre: Decimal
+    part: Decimal
+
+    @field_serializer(
+        "revenus", "charges", "reste_a_vivre", "part", when_used="json"
+    )
+    def _serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
+
+
+class RepartitionCommuneRead(BaseModel):
+    tag_id: int
+    tag_name: str
+    montant_total: Decimal
+    parts: list[RepartitionCommuneAccountPart]
+
+    @field_serializer("montant_total", when_used="json")
+    def _serialize_montant_total(self, value: Decimal) -> float:
+        return float(value)
+
+
 class DisponibleRead(BaseModel):
     account_id: int
     period_start: date

@@ -1,15 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
-import { getDisponible, getTagSpending, getTagTracking } from '../api/budget'
-import type { Disponible, TagSpending, TagTracking } from '../api/budget'
+import { getDisponible, getRepartitionCommune, getTagSpending, getTagTracking } from '../api/budget'
+import type { Disponible, RepartitionCommuneRead, TagSpending, TagTracking } from '../api/budget'
 import { getProjection } from '../api/projections'
 import type { ProjectionItem } from '../api/projections'
+import { getTags } from '../api/tags'
+import type { Tag } from '../api/tags'
 import { getTransactions } from '../api/transactions'
 import type { Transaction } from '../api/transactions'
 import AccountCard from '../components/AccountCard'
-import { breadcrumbPath, buildSpendingRows, formatDate, formatMontant, formatPourcentage, shiftDate } from '../lib/format'
+import {
+  breadcrumbPath,
+  buildSpendingRows,
+  formatDate,
+  formatMontant,
+  formatPourcentage,
+  shiftDate,
+  tagBreadcrumb,
+} from '../lib/format'
 
 const formFieldClass =
   'rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink focus:border-accent focus:outline-none'
@@ -134,6 +144,21 @@ function Dashboard() {
   const [periodStart, setPeriodStart] = useState<string | null>(null)
   const [periodEnd, setPeriodEnd] = useState<string | null>(null)
 
+  const [tags, setTags] = useState<Tag[]>([])
+  const [tagsError, setTagsError] = useState<string | null>(null)
+  const [repartitionMontant, setRepartitionMontant] = useState('')
+  const [repartitionTagId, setRepartitionTagId] = useState('')
+  const [repartitionResult, setRepartitionResult] = useState<RepartitionCommuneRead | null>(null)
+  const [repartitionLoading, setRepartitionLoading] = useState(false)
+  const [repartitionError, setRepartitionError] = useState<string | null>(null)
+  // Jeton de requête (patron `cancelled` du useEffect principal, adapté à un appel
+  // déclenché par bouton plutôt que par effet) : incrémenté à chaque nouveau calcul
+  // et à chaque reset de Compte/Période, pour qu'une réponse en vol devenue obsolète
+  // ne réaffiche jamais un résultat périmé (AC #4).
+  const repartitionRequestIdRef = useRef(0)
+
+  const tagById = useMemo(() => new Map(tags.map((t) => [t.tag_id, t])), [tags])
+
   useEffect(() => {
     getAccounts()
       .then((data) => {
@@ -146,7 +171,27 @@ function Dashboard() {
       })
   }, [])
 
+  // Fetch inconditionnel dès le montage : le Dashboard n'a pas connaissance du
+  // Compte sélectionné avant le premier rendu, et le calculateur (Compte Commun
+  // uniquement) a besoin de la liste des Tags pour son <select>.
+  useEffect(() => {
+    getTags()
+      .then((data) => {
+        setTags(data)
+        setTagsError(null)
+      })
+      .catch((err) => {
+        setTagsError(err instanceof Error ? err.message : 'Erreur inattendue')
+      })
+  }, [])
+
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) ?? null
+
+  // `referenceDate` vaut `undefined` sur la Période courante, ou une date à
+  // l'intérieur d'une Période archivée (calculée par `shiftDate`) — dérivée ici une
+  // seule fois pour être partagée par le `useEffect` de fetch et le calculateur de
+  // répartition (bouton « Calculer »), pas dupliquée.
+  const targetPeriodStart = selectedAccount ? (referenceDate ?? selectedAccount.period_start) : null
 
   // Changer de Compte revient toujours à sa propre Période courante, jamais à
   // une Période archivée d'un autre Compte (cf. Dev Notes §Deux sources de
@@ -170,6 +215,14 @@ function Dashboard() {
     setTransactionsError(null)
     setPeriodStart(null)
     setPeriodEnd(null)
+    // Un résultat de calculateur affiché doit toujours correspondre à la Période/au
+    // Compte actuellement affichés (AC #4) — jamais laissé visible après un changement
+    // de Compte ou de navigation vers une autre Période via les chevrons (Story 6.3).
+    // Invalide aussi tout calcul encore en vol (cf. `repartitionRequestIdRef`) pour
+    // qu'une réponse tardive ne ressuscite pas un résultat de l'ancien Compte/Période.
+    repartitionRequestIdRef.current += 1
+    setRepartitionResult(null)
+    setRepartitionError(null)
 
     if (!selectedAccount) return
 
@@ -195,14 +248,9 @@ function Dashboard() {
         if (!cancelled) setTransactionsLoading(false)
       })
 
-    // `referenceDate` vaut `undefined` sur la Période courante, ou une date à
-    // l'intérieur d'une Période archivée (calculée par `shiftDate`) — ces
-    // endpoints acceptent n'importe quelle date à l'intérieur de la Période cible.
-    const targetPeriodStart = referenceDate ?? selectedAccount.period_start
-
     if (selectedAccount.is_common) {
       setTagSpendingLoading(true)
-      getTagSpending(selectedAccount.account_id, targetPeriodStart)
+      getTagSpending(selectedAccount.account_id, targetPeriodStart!)
         .then((data) => {
           if (!cancelled) setTagSpending(data)
         })
@@ -214,7 +262,7 @@ function Dashboard() {
         })
     } else {
       setDisponibleLoading(true)
-      getDisponible(selectedAccount.account_id, targetPeriodStart)
+      getDisponible(selectedAccount.account_id, targetPeriodStart!)
         .then((data) => {
           if (!cancelled) setDisponible(data)
         })
@@ -226,7 +274,7 @@ function Dashboard() {
         })
 
       setTagTrackingLoading(true)
-      getTagTracking(selectedAccount.account_id, targetPeriodStart)
+      getTagTracking(selectedAccount.account_id, targetPeriodStart!)
         .then((data) => {
           if (!cancelled) setTagTracking(data)
         })
@@ -241,7 +289,7 @@ function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [selectedAccount, referenceDate])
+  }, [selectedAccount, referenceDate, targetPeriodStart])
 
   // La Projection est ancrée sur `date.today()` côté serveur (jamais sur la
   // Période affichée) : ses dépendances excluent volontairement `referenceDate`
@@ -291,6 +339,30 @@ function Dashboard() {
     if (periodEnd) setReferenceDate(shiftDate(periodEnd, 1))
   }
 
+  // Calcul non automatique (patron `submitTargetForm` de Budget.tsx) : déclenché
+  // uniquement par le bouton « Calculer », jamais en réaction à une simple frappe
+  // dans le montant ou un changement de Tag.
+  function submitRepartition() {
+    if (!targetPeriodStart || repartitionMontant === '' || repartitionTagId === '') return
+    const requestId = ++repartitionRequestIdRef.current
+    setRepartitionLoading(true)
+    getRepartitionCommune(Number(repartitionMontant), Number(repartitionTagId), targetPeriodStart)
+      .then((data) => {
+        if (repartitionRequestIdRef.current !== requestId) return
+        setRepartitionResult(data)
+        setRepartitionError(null)
+      })
+      .catch((err) => {
+        if (repartitionRequestIdRef.current !== requestId) return
+        setRepartitionError(err instanceof Error ? err.message : 'Erreur inattendue')
+        setRepartitionResult(null)
+      })
+      .finally(() => {
+        if (repartitionRequestIdRef.current !== requestId) return
+        setRepartitionLoading(false)
+      })
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-4 lg:px-7">
       {selectedAccount?.is_common && (
@@ -306,6 +378,80 @@ function Dashboard() {
               {formatMontant(selectedAccount.balance)}
             </p>
           </div>
+
+          {/* Calculateur de répartition du virement vers le Compte Commun (FR-35/FR-36,
+              Story 6.6) — calcul entièrement serveur (AD-2), aucune agrégation côté client. */}
+          <section className="mt-8">
+            <h2 className="text-label uppercase text-ink-muted">Calculateur de répartition</h2>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="Montant total"
+                aria-label="Montant total à verser"
+                value={repartitionMontant}
+                onChange={(e) => setRepartitionMontant(e.target.value)}
+                disabled={repartitionLoading}
+                className={formFieldClass}
+              />
+              <select
+                value={repartitionTagId}
+                onChange={(e) => setRepartitionTagId(e.target.value)}
+                aria-label="Tag de référence pour le Reste à vivre"
+                disabled={repartitionLoading}
+                className={formFieldClass}
+              >
+                <option value="">Choisir un Tag…</option>
+                {tags.map((t) => (
+                  <option key={t.tag_id} value={t.tag_id}>
+                    {tagBreadcrumb(t, tagById)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={submitRepartition}
+                disabled={repartitionLoading || repartitionMontant === '' || repartitionTagId === ''}
+                className="text-body-strong text-accent disabled:opacity-60"
+              >
+                Calculer
+              </button>
+            </div>
+
+            {tagsError && <p className="mt-2 text-body text-alert">{tagsError}</p>}
+            {repartitionError && <p className="mt-2 text-body text-alert">{repartitionError}</p>}
+
+            {repartitionResult && (
+              <div className="mt-4">
+                {/* Rappel explicite du Tag/montant du résultat affiché : le calcul n'est pas
+                    réactif (décision Task 4) — le formulaire peut diverger du résultat si
+                    l'utilisateur change le Tag/montant sans recliquer « Calculer ». */}
+                <p className="text-caption text-ink-muted">
+                  Répartition de {formatMontant(repartitionResult.montant_total)} sur{' '}
+                  {repartitionResult.tag_name}
+                </p>
+                <div className="mt-2 overflow-hidden rounded border border-border">
+                  {repartitionResult.parts.map((part) => (
+                    <div
+                      key={part.account_id}
+                      className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle px-4 py-2 first:border-t-0"
+                      aria-label={`${part.account_name}, Reste à vivre ${formatMontant(part.reste_a_vivre)}, part due ${formatMontant(part.part)}`}
+                    >
+                      <div>
+                        <p className="text-body-strong text-ink">{part.account_name}</p>
+                        <p className="text-caption text-ink-muted">
+                          Reste à vivre : {formatMontant(part.reste_a_vivre)}
+                        </p>
+                      </div>
+                      <p className="font-mono text-body-strong text-ink">{formatMontant(part.part)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
         </>
       )}
 

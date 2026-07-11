@@ -162,6 +162,85 @@ def test_parent_aggregates_direct_plus_children_three_levels(db):
     assert by_id[grandparent.tag_id].spent == Decimal("35.00")
 
 
+def test_hierarchy_two_levels_parent_immediately_followed_by_children(db):
+    account = _add_account(db)
+    parent = _add_tag(db, name="Charges", level=1)
+    fixes = _add_tag(db, name="Fixes", parent_id=parent.tag_id, level=2)
+    variables = _add_tag(db, name="Variables", parent_id=parent.tag_id, level=2)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, fixes, Decimal("-10.00"), today)
+    _add_expense(db, account, variables, Decimal("-5.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    order = [r.tag_id for r in result]
+
+    parent_index = order.index(parent.tag_id)
+    # Ordre exact (pas seulement l'ensemble) : les frères sont triés par tag_id
+    # croissant, ordre de création ici puisque `fixes` a été créé avant `variables`.
+    assert order[parent_index + 1 : parent_index + 3] == [fixes.tag_id, variables.tag_id]
+
+
+def test_two_independent_root_groups_keep_stable_order(db):
+    account = _add_account(db)
+    alimentation = _add_tag(db, name="Alimentation", level=1)
+    loisirs = _add_tag(db, name="Loisirs", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, alimentation, Decimal("-10.00"), today)
+    _add_expense(db, account, loisirs, Decimal("-20.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    order = [r.tag_id for r in result]
+
+    assert order.index(alimentation.tag_id) < order.index(loisirs.tag_id)
+
+
+def test_child_with_target_but_parent_without_spend_or_target_is_its_own_root(db):
+    account = _add_account(db)
+    parent = _add_tag(db, name="Charges", level=1)
+    child = _add_tag(db, name="Fixes", parent_id=parent.tag_id, level=2)
+    today = date.today()
+    period_start = _current_period_start(today)
+    upsert_salaire(
+        RevenueSalaireUpsert(account_id=account.account_id, period_start=None, amount=Decimal("1000.00")),
+        db,
+    )
+    upsert_budget_target(
+        BudgetTargetUpsert(account_id=account.account_id, tag_id=child.tag_id, percentage=Decimal("20.00")),
+        db,
+    )
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    order = [r.tag_id for r in result]
+
+    # Le parent n'a ni dépense (propre ou remontée) ni Cible propre : il est absent
+    # de `included_tag_ids`, donc absent du résultat. L'enfant apparaît seul, comme
+    # sa propre racine de groupe (même règle que `buildTargetBlocks` pour les Cibles).
+    assert parent.tag_id not in order
+    assert child.tag_id in order
+
+
+def test_three_level_hierarchy_order_is_depth_first(db):
+    account = _add_account(db)
+    grandparent = _add_tag(db, name="Vie quotidienne", level=1)
+    parent = _add_tag(db, name="Alimentation", parent_id=grandparent.tag_id, level=2)
+    child = _add_tag(db, name="Restaurant", parent_id=parent.tag_id, level=3)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, grandparent, Decimal("-5.00"), today)
+    _add_expense(db, account, parent, Decimal("-20.00"), today)
+    _add_expense(db, account, child, Decimal("-10.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    order = [r.tag_id for r in result]
+
+    assert order == [grandparent.tag_id, parent.tag_id, child.tag_id]
+
+
 def test_past_period_has_no_projection_even_with_target(db):
     account = _add_account(db)
     tag = _add_tag(db)

@@ -151,3 +151,35 @@ export async function getTagSpending(accountId: number, periodStart: string): Pr
   const response = await fetch(`/tag-spending?${params.toString()}`)
   return unwrap<TagSpending[]>(response)
 }
+
+export interface RepartitionCommuneAccountPart {
+  account_id: number
+  account_name: string
+  period_start: string
+  period_end: string
+  revenus: number
+  charges: number
+  reste_a_vivre: number
+  part: number
+}
+
+export interface RepartitionCommuneRead {
+  tag_id: number
+  tag_name: string
+  montant_total: number
+  parts: RepartitionCommuneAccountPart[]
+}
+
+export async function getRepartitionCommune(
+  montantTotal: number,
+  tagId: number,
+  periodStart: string,
+): Promise<RepartitionCommuneRead> {
+  const params = new URLSearchParams({
+    montant_total: String(montantTotal),
+    tag_id: String(tagId),
+    period_start: periodStart,
+  })
+  const response = await fetch(`/repartition-commune?${params.toString()}`)
+  return unwrap<RepartitionCommuneRead>(response)
+}

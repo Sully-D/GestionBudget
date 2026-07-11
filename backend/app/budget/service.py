@@ -11,6 +11,8 @@ from app.budget.model import BudgetTarget, Revenue
 from app.budget.schema import (
     BudgetTargetUpsert,
     DisponibleRead,
+    RepartitionCommuneAccountPart,
+    RepartitionCommuneRead,
     RevenueOneOffCreate,
     RevenuePeriodSummary,
     RevenueRead,
@@ -284,6 +286,40 @@ def _spent_by_tag_for_period(
     return total_spent, tag_by_id
 
 
+def _hierarchical_tag_order(tag_ids: set[int], tag_by_id: dict[int, Tag]) -> list[int]:
+    # Même algorithme que `buildTargetBlocks` (frontend/src/pages/Budget.tsx) pour les
+    # Cibles : un tag est une racine de groupe si son parent n'est pas lui-même inclus
+    # dans `tag_ids` (parent absent de la Répartition, ou pas de parent du tout). Chaque
+    # groupe de frères est trié par tag_id croissant (ordre de création, ordre stable
+    # inchangé) puis parcouru en profondeur pour qu'un parent soit toujours immédiatement
+    # suivi de tous ses descendants.
+    # Précondition non vérifiée à l'exécution (jamais violée par les deux appelants
+    # actuels, `get_tag_tracking`/`get_tag_spending`, qui construisent toujours `tag_ids`
+    # comme un sous-ensemble des clés de `tag_by_id`) : `tag_ids ⊆ tag_by_id.keys()`.
+    # La récursion de `visit()` n'a pas de garde de profondeur propre — sa terminaison
+    # s'appuie sur `MAX_LEVEL=3` (`app/tags/model.py`, contrainte DB `ck_tags_level_range`),
+    # qui borne la hauteur de toute chaîne de parenté à 3.
+    children_by_group_parent: dict[int | None, list[int]] = {}
+    for tag_id in tag_ids:
+        parent_id = tag_by_id[tag_id].parent_id
+        group_parent = parent_id if parent_id in tag_ids else None
+        children_by_group_parent.setdefault(group_parent, []).append(tag_id)
+    for siblings in children_by_group_parent.values():
+        siblings.sort()
+
+    ordered: list[int] = []
+
+    def visit(tag_id: int) -> None:
+        ordered.append(tag_id)
+        for child_id in children_by_group_parent.get(tag_id, []):
+            visit(child_id)
+
+    for root_id in children_by_group_parent.get(None, []):
+        visit(root_id)
+
+    return ordered
+
+
 def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[TagTrackingRead]:
     account = _get_personal_account_or_404(account_id, db)
     today = date.today()
@@ -306,7 +342,7 @@ def get_tag_tracking(account_id: int, period_start: date, db: Session) -> list[T
     } | set(target_by_tag.keys())
 
     result: list[TagTrackingRead] = []
-    for tag_id in sorted(included_tag_ids):
+    for tag_id in _hierarchical_tag_order(included_tag_ids, tag_by_id):
         tag = tag_by_id[tag_id]
         spent = total_spent.get(tag_id, Decimal("0.00"))
         target = target_by_tag.get(tag_id)
@@ -356,7 +392,7 @@ def get_tag_spending(account_id: int, period_start: date, db: Session) -> list[T
     included_tag_ids = {tag_id for tag_id, spent in total_spent.items() if spent != 0}
 
     result: list[TagSpendingRead] = []
-    for tag_id in sorted(included_tag_ids):
+    for tag_id in _hierarchical_tag_order(included_tag_ids, tag_by_id):
         tag = tag_by_id[tag_id]
         result.append(
             TagSpendingRead(
@@ -569,4 +605,67 @@ def get_disponible(account_id: int, period_start: date, db: Session) -> Disponib
         depenses_planifiees=depenses_planifiees,
         depenses_courantes=depenses_courantes,
         disponible=disponible,
+    )
+
+
+def get_repartition_commune(
+    montant_total: Decimal, tag_id: int, period_start: date, db: Session
+) -> RepartitionCommuneRead:
+    tag = _get_tag_or_404(tag_id, db)
+
+    personal_accounts = (
+        db.query(Account)
+        .filter(Account.is_common.is_(False))
+        .order_by(Account.account_id)
+        .all()
+    )
+
+    parts: list[RepartitionCommuneAccountPart] = []
+    for account in personal_accounts:
+        account_period_start, account_period_end = period_for(account.start_day, period_start)
+        revenus = get_period_summary(account.account_id, account_period_start, db).total
+        total_spent, _ = _spent_by_tag_for_period(
+            account.account_id, account_period_start, account_period_end, db
+        )
+        charges = total_spent.get(tag_id, Decimal("0.00"))
+        reste_a_vivre = revenus - charges
+        parts.append(
+            RepartitionCommuneAccountPart(
+                account_id=account.account_id,
+                account_name=account.name,
+                period_start=account_period_start,
+                period_end=account_period_end,
+                revenus=revenus,
+                charges=charges,
+                reste_a_vivre=reste_a_vivre,
+                part=Decimal("0.00"),
+            )
+        )
+
+    if not parts:
+        raise HTTPException(
+            status_code=422,
+            detail="Aucun Compte Personnel : la répartition ne peut pas être calculée.",
+        )
+    for p in parts:
+        if p.reste_a_vivre <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Le Reste à vivre de {p.account_name} est négatif ou nul "
+                    f"({p.reste_a_vivre} €) : la répartition ne peut pas être calculée."
+                ),
+            )
+
+    total_rav = sum((p.reste_a_vivre for p in parts), Decimal("0.00"))
+    for p in parts:
+        p.part = (montant_total * p.reste_a_vivre / total_rav).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    return RepartitionCommuneRead(
+        tag_id=tag.tag_id,
+        tag_name=tag.name,
+        montant_total=montant_total,
+        parts=parts,
     )
