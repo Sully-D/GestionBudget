@@ -2,8 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
-import { getDisponible, getRepartitionCommune, getTagSpending, getTagTracking } from '../api/budget'
-import type { Disponible, RepartitionCommuneRead, TagSpending, TagTracking } from '../api/budget'
+import {
+  getDisponible,
+  getRecapCouple,
+  getRepartitionCommune,
+  getTagSpending,
+  getTagTracking,
+  updateCoupleChargesPercentage,
+} from '../api/budget'
+import type { Disponible, RecapCoupleRead, RepartitionCommuneRead, TagSpending, TagTracking } from '../api/budget'
 import { getProjection } from '../api/projections'
 import type { ProjectionItem } from '../api/projections'
 import { getTags } from '../api/tags'
@@ -156,6 +163,36 @@ function Dashboard() {
   // et à chaque reset de Compte/Période, pour qu'une réponse en vol devenue obsolète
   // ne réaffiche jamais un résultat périmé (AC #4).
   const repartitionRequestIdRef = useRef(0)
+
+  // Récap Budget Couple (Tableau 1 + Tableau 2, Compte Commun uniquement) — fenêtre de
+  // N mois calendaires stricts indépendante de la Période budgétaire affichée (AD-2,
+  // calcul entièrement serveur). `recapMonthsInput` reste une chaîne pour permettre un
+  // champ vide/partiel pendant la frappe sans déclencher de fetch invalide.
+  const [recapMonthsInput, setRecapMonthsInput] = useState('3')
+  const recapMonthsValue = Number(recapMonthsInput)
+  const recapMonthsValid =
+    recapMonthsInput.trim() !== '' &&
+    Number.isInteger(recapMonthsValue) &&
+    recapMonthsValue >= 1 &&
+    recapMonthsValue <= 120
+  const [recapCouple, setRecapCouple] = useState<RecapCoupleRead | null>(null)
+  const [recapCoupleLoading, setRecapCoupleLoading] = useState(false)
+  const [recapCoupleError, setRecapCoupleError] = useState<string | null>(null)
+
+  const [percentageDraft, setPercentageDraft] = useState('')
+  const [percentageSubmitting, setPercentageSubmitting] = useState(false)
+  const [percentageError, setPercentageError] = useState<string | null>(null)
+  // Jeton de requête (même patron que `repartitionRequestIdRef`) partagé entre le
+  // `useEffect` de fetch principal et le refetch manuel post-PATCH de
+  // `submitCoupleChargesPercentage` : incrémenté à chaque déclenchement (changement de
+  // Compte/N mois ou sauvegarde réussie), une réponse en vol devenue obsolète n'est
+  // jamais appliquée.
+  const recapCoupleRequestIdRef = useRef(0)
+  // `account_id` du Récap lors de la dernière synchronisation de `percentageDraft` —
+  // ne resynchronise que sur un changement de Compte (ou explicitement après une
+  // sauvegarde réussie), jamais sur un simple refetch déclenché par un changement de
+  // "N mois" pendant que l'utilisateur tape une valeur pas encore enregistrée.
+  const percentageSyncedAccountIdRef = useRef<number | null>(null)
 
   const tagById = useMemo(() => new Map(tags.map((t) => [t.tag_id, t])), [tags])
 
@@ -339,6 +376,96 @@ function Dashboard() {
     if (periodEnd) setReferenceDate(shiftDate(periodEnd, 1))
   }
 
+  // Récap Budget Couple : fenêtre de N mois calendaires stricts (indépendante de la
+  // Période budgétaire affichée) — recalcul immédiat au changement de N ou de Compte
+  // (AC #1), tout calcul reste serveur (AD-2).
+  useEffect(() => {
+    if (!selectedAccount || !selectedAccount.is_common || !recapMonthsValid) {
+      recapCoupleRequestIdRef.current += 1
+      setRecapCouple(null)
+      setRecapCoupleError(null)
+      setRecapCoupleLoading(false)
+      return
+    }
+
+    const requestId = ++recapCoupleRequestIdRef.current
+    setRecapCoupleLoading(true)
+    getRecapCouple(selectedAccount.account_id, recapMonthsValue)
+      .then((data) => {
+        if (recapCoupleRequestIdRef.current !== requestId) return
+        setRecapCouple(data)
+        setRecapCoupleError(null)
+      })
+      .catch((err) => {
+        if (recapCoupleRequestIdRef.current !== requestId) return
+        setRecapCoupleError(err instanceof Error ? err.message : 'Erreur inattendue')
+        setRecapCouple(null)
+      })
+      .finally(() => {
+        if (recapCoupleRequestIdRef.current !== requestId) return
+        setRecapCoupleLoading(false)
+      })
+  }, [selectedAccount, recapMonthsValid, recapMonthsValue])
+
+  // Pré-remplissage du NB% (AC #2) : ne resynchronise `percentageDraft` que lorsque le
+  // Compte du Récap affiché change (chargement initial inclus, `null` -> Compte Commun,
+  // ou changement de Compte sélectionné) — jamais sur un simple refetch déclenché par un
+  // changement de "N mois", qui écraserait sinon silencieusement une saisie NB% en cours
+  // pas encore enregistrée. La resynchronisation post-sauvegarde est gérée explicitement
+  // dans `submitCoupleChargesPercentage`.
+  useEffect(() => {
+    const currentAccountId = recapCouple ? recapCouple.account_id : null
+    if (percentageSyncedAccountIdRef.current === currentAccountId) return
+    percentageSyncedAccountIdRef.current = currentAccountId
+    setPercentageDraft(
+      recapCouple && recapCouple.couple_charges_percentage !== null
+        ? String(recapCouple.couple_charges_percentage)
+        : '',
+    )
+    setPercentageError(null)
+  }, [recapCouple])
+
+  // Pattern `Budget.tsx::submitTargetForm` : PATCH puis refetch (jamais de mise à jour
+  // optimiste locale du Tableau 2), déclenché uniquement par « Enregistrer ». Le refetch
+  // réutilise le même jeton `recapCoupleRequestIdRef` que le `useEffect` principal :
+  // si l'utilisateur change de Compte ou de "N mois" pendant les deux allers-retours
+  // réseau (PATCH puis GET), la réponse tardive de ce refetch manuel est ignorée.
+  async function submitCoupleChargesPercentage() {
+    if (!selectedAccount) return
+    const value = Number(percentageDraft)
+    if (percentageDraft.trim() === '' || Number.isNaN(value) || value < 0 || value > 100) {
+      setPercentageError('Le pourcentage doit être compris entre 0 et 100.')
+      return
+    }
+    if (percentageSubmitting) return
+    setPercentageSubmitting(true)
+    try {
+      await updateCoupleChargesPercentage(selectedAccount.account_id, value)
+    } catch (err) {
+      setPercentageError(err instanceof Error ? err.message : 'Erreur inattendue')
+      setPercentageSubmitting(false)
+      return
+    }
+    setPercentageError(null)
+    setPercentageSubmitting(false)
+    if (!recapMonthsValid) return
+    const requestId = ++recapCoupleRequestIdRef.current
+    try {
+      const data = await getRecapCouple(selectedAccount.account_id, recapMonthsValue)
+      if (recapCoupleRequestIdRef.current !== requestId) return
+      setRecapCouple(data)
+      // Sauvegarde réussie : resynchronise explicitement le NB% affiché (formatage
+      // normalisé par le serveur), même si le Compte n'a pas changé.
+      percentageSyncedAccountIdRef.current = data.account_id
+      setPercentageDraft(
+        data.couple_charges_percentage !== null ? String(data.couple_charges_percentage) : '',
+      )
+    } catch (err) {
+      if (recapCoupleRequestIdRef.current !== requestId) return
+      setRecapCoupleError(err instanceof Error ? err.message : 'Erreur inattendue')
+    }
+  }
+
   // Calcul non automatique (patron `submitTargetForm` de Budget.tsx) : déclenché
   // uniquement par le bouton « Calculer », jamais en réaction à une simple frappe
   // dans le montant ou un changement de Tag.
@@ -378,6 +505,204 @@ function Dashboard() {
               {formatMontant(selectedAccount.balance)}
             </p>
           </div>
+
+          {/* Récap Budget Couple (Tableau 1 « Récap' » + Tableau 2 « Budget Couple ») —
+              Compte Commun uniquement, positionné avant le Calculateur de répartition
+              (spec-recap-budget-couple-dashboard-commun.md). Concept de Reste à vivre
+              distinct et indépendant de celui du Calculateur : aucune tentative
+              d'unification. Calcul entièrement serveur (AD-2). */}
+          <section className="mt-8">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-label uppercase text-ink-muted">Récap' Budget Couple</h2>
+              <label className="flex items-center gap-2 text-body text-ink-muted">
+                Sur
+                <input
+                  type="number"
+                  min="1"
+                  max="120"
+                  step="1"
+                  value={recapMonthsInput}
+                  onChange={(e) => setRecapMonthsInput(e.target.value)}
+                  aria-label="Nombre de mois du Récap"
+                  className={`${formFieldClass} w-16`}
+                />
+                mois
+              </label>
+            </div>
+
+            {!recapMonthsValid && (
+              <p className="mt-2 text-body text-alert">
+                Le nombre de mois doit être un entier compris entre 1 et 120.
+              </p>
+            )}
+            {recapCoupleError && <p className="mt-2 text-body text-alert">{recapCoupleError}</p>}
+            {recapCoupleLoading && !recapCouple && !recapCoupleError && (
+              <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
+            )}
+
+            {recapCouple && (
+              <>
+                <table className="mt-4 hidden w-full lg:table">
+                  <thead className="bg-surface">
+                    <tr>
+                      <th className="px-2 py-2 text-left text-table-header uppercase text-ink-muted">Compte</th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">Revenus</th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">Charges</th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">Virements</th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">
+                        Investissements
+                      </th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">
+                        Charges + Virements
+                      </th>
+                      <th className="px-2 py-2 text-right text-table-header uppercase text-ink-muted">
+                        Reste à vivre
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recapCouple.rows.map((row) => (
+                      <tr key={row.account_id} className="border-t border-border-subtle">
+                        <td className="px-2 py-2 text-body text-ink">{row.account_name}</td>
+                        <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
+                          {formatMontant(row.revenus)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-body text-ink-muted">
+                          {formatMontant(row.charges)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-body text-ink-muted">
+                          {formatMontant(row.virements)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-body text-ink-muted">
+                          {formatMontant(row.investissements)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-body text-ink-muted">
+                          {formatMontant(row.charges_plus_virements)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
+                          {formatMontant(row.reste_a_vivre)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t border-border bg-surface-panel">
+                      <td className="px-2 py-2 text-body-strong text-ink">Couple (total)</td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
+                        {formatMontant(recapCouple.total_revenus)}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink-muted">
+                        {formatMontant(recapCouple.total_charges)}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink-muted">
+                        {formatMontant(recapCouple.total_virements)}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink-muted">
+                        {formatMontant(recapCouple.total_investissements)}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink-muted">
+                        {formatMontant(recapCouple.total_charges_plus_virements)}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
+                        {formatMontant(recapCouple.total_reste_a_vivre)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div className="mt-4 flex flex-col gap-3 lg:hidden">
+                  {recapCouple.rows.map((row) => (
+                    <div key={row.account_id} className="rounded border border-border bg-surface p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-body-strong text-ink">{row.account_name}</span>
+                        <span className="font-mono text-body-strong text-ink">
+                          {formatMontant(row.reste_a_vivre)}
+                        </span>
+                      </div>
+                      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-caption text-ink-muted">
+                        <span>Revenus : {formatMontant(row.revenus)}</span>
+                        <span>Charges : {formatMontant(row.charges)}</span>
+                        <span>Virements : {formatMontant(row.virements)}</span>
+                        <span>Investissements : {formatMontant(row.investissements)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="rounded border border-border bg-surface-panel p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-body-strong text-ink">Couple (total)</span>
+                      <span className="font-mono text-body-strong text-ink">
+                        {formatMontant(recapCouple.total_reste_a_vivre)}
+                      </span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-caption text-ink-muted">
+                      <span>Revenus : {formatMontant(recapCouple.total_revenus)}</span>
+                      <span>Charges : {formatMontant(recapCouple.total_charges)}</span>
+                      <span>Virements : {formatMontant(recapCouple.total_virements)}</span>
+                      <span>Investissements : {formatMontant(recapCouple.total_investissements)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tableau 2 « Budget Couple » — NB% persisté (colonne `accounts`), jamais
+                    d'édition inline : champ + bouton « Enregistrer » (pattern
+                    `Budget.tsx::submitTargetForm`), pré-rempli sans action au chargement (AC #2). */}
+                <div className="mt-6 overflow-hidden rounded border border-border">
+                  <div className="border-b border-border bg-surface-panel px-4 py-3">
+                    <span className="text-section-title font-bold uppercase tracking-wide text-ink-muted">
+                      Budget Couple
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-3 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-body text-ink-muted">Revenus du Couple</span>
+                      <span className="font-mono text-body-strong text-ink">
+                        {formatMontant(recapCouple.total_revenus)}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label htmlFor="couple-charges-percentage" className="text-body text-ink-muted">
+                        Charges convenues (% des Revenus)
+                      </label>
+                      <input
+                        id="couple-charges-percentage"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={percentageDraft}
+                        onChange={(e) => setPercentageDraft(e.target.value)}
+                        disabled={percentageSubmitting}
+                        className={formFieldClass}
+                      />
+                      <button
+                        type="button"
+                        onClick={submitCoupleChargesPercentage}
+                        disabled={percentageSubmitting}
+                        className="text-body-strong text-accent disabled:opacity-60"
+                      >
+                        Enregistrer
+                      </button>
+                    </div>
+                    {percentageError && <p className="text-body text-alert">{percentageError}</p>}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-body text-ink-muted">Budget de charges convenu</span>
+                      <span className="font-mono text-body-strong text-ink">
+                        {recapCouple.budget_charges_convenu !== null
+                          ? formatMontant(recapCouple.budget_charges_convenu)
+                          : '—'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-body text-ink-muted">Reste disponible</span>
+                      <span className="font-mono text-body-strong text-ink">
+                        {recapCouple.reste_disponible !== null
+                          ? formatMontant(recapCouple.reste_disponible)
+                          : '—'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
 
           {/* Calculateur de répartition du virement vers le Compte Commun (FR-35/FR-36,
               Story 6.6) — calcul entièrement serveur (AD-2), aucune agrégation côté client. */}

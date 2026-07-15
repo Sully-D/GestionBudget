@@ -10,7 +10,10 @@ from app.accounts.service import compute_period
 from app.budget.model import BudgetTarget, Revenue
 from app.budget.schema import (
     BudgetTargetUpsert,
+    CoupleChargesPercentageUpdate,
     DisponibleRead,
+    RecapCoupleAccountRow,
+    RecapCoupleRead,
     RepartitionCommuneAccountPart,
     RepartitionCommuneRead,
     RevenueOneOffCreate,
@@ -238,9 +241,14 @@ def delete_budget_target(target_id: int, db: Session) -> None:
     db.commit()
 
 
-def _spent_by_tag_for_period(
-    account_id: int, period_start: date, period_end: date, db: Session
+def _amount_by_tag_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session, *, positive: bool
 ) -> tuple[dict[int, Decimal], dict[int, Tag]]:
+    # Logique commune à `_spent_by_tag_for_period` (dépenses, `positive=False`) et
+    # `_revenus_by_exact_tag_for_calendar_months` (revenus, `positive=True`) : seule la
+    # clause de signe diffère entre les deux usages. Remonte chaque transaction vers
+    # tous ses ancêtres/elle-même pour la déduplication (cf. commentaire ci-dessous).
+    amount_filter = Transaction.amount > 0 if positive else Transaction.amount < 0
     rows = (
         db.query(TransactionTag.transaction_id, TransactionTag.tag_id, Transaction.amount)
         .join(Transaction, Transaction.transaction_id == TransactionTag.transaction_id)
@@ -248,7 +256,7 @@ def _spent_by_tag_for_period(
             Transaction.account_id == account_id,
             Transaction.date >= period_start,
             Transaction.date <= period_end,
-            Transaction.amount < 0,
+            amount_filter,
         )
         .all()
     )
@@ -256,7 +264,7 @@ def _spent_by_tag_for_period(
     txn_amount: dict[int, Decimal] = {}
     for transaction_id, tag_id, amount in rows:
         txn_tag_ids.setdefault(transaction_id, set()).add(tag_id)
-        txn_amount[transaction_id] = abs(amount)
+        txn_amount[transaction_id] = amount if positive else abs(amount)
 
     tags = db.query(Tag).all()
     tag_by_id = {tag.tag_id: tag for tag in tags}
@@ -273,17 +281,23 @@ def _spent_by_tag_for_period(
             current = tag_by_id.get(current.parent_id) if current.parent_id is not None else None
         ancestors_or_self[tag.tag_id] = chain
 
-    total_spent: dict[int, Decimal] = {tag.tag_id: Decimal("0.00") for tag in tags}
+    total: dict[int, Decimal] = {tag.tag_id: Decimal("0.00") for tag in tags}
     for transaction_id, tag_ids in txn_tag_ids.items():
         amount = txn_amount[transaction_id]
         affected_tag_ids: set[int] = set()
         for tag_id in tag_ids:
             affected_tag_ids.update(ancestors_or_self.get(tag_id, ()))
         for tag_id in affected_tag_ids:
-            if tag_id in total_spent:
-                total_spent[tag_id] += amount
+            if tag_id in total:
+                total[tag_id] += amount
 
-    return total_spent, tag_by_id
+    return total, tag_by_id
+
+
+def _spent_by_tag_for_period(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> tuple[dict[int, Decimal], dict[int, Tag]]:
+    return _amount_by_tag_for_period(account_id, period_start, period_end, db, positive=False)
 
 
 def _hierarchical_tag_order(tag_ids: set[int], tag_by_id: dict[int, Tag]) -> list[int]:
@@ -669,3 +683,215 @@ def get_repartition_commune(
         montant_total=montant_total,
         parts=parts,
     )
+
+
+def _month_start_before(reference_month_start: date, count: int) -> date:
+    # `add_months` (core/period.py) n'avance que vers l'avant : `range(months)` avec un
+    # argument négatif est une boucle vide, donc `add_months(x, -1)` renvoie `x`
+    # inchangé plutôt que le mois précédent. Arithmétique calendaire directe pour la
+    # seule direction manquante ; `add_months` reste utilisé pour toutes les
+    # opérations vers l'avant (bornes de fin de mois, énumération de la fenêtre).
+    year = reference_month_start.year
+    month = reference_month_start.month - count
+    while month < 1:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
+def _assert_tags_mutually_exclusive(tags: list[Tag], db: Session) -> None:
+    # Les 4 Tags exacts du Récap Budget Couple (Revenus/Charges/Virements compte
+    # commun/Investissements) doivent être mutuellement exclusifs : si l'un est
+    # ancêtre d'un autre, `_spent_by_tag_for_period`/
+    # `_revenus_by_exact_tag_for_calendar_months` remontent une même transaction vers
+    # TOUS ses ancêtres inclus dans l'ensemble de Tags considéré — un montant serait
+    # alors compté deux fois (ex. dans Charges ET dans Virements). `Tag.level` va de 1
+    # à `MAX_LEVEL=3` (contrainte DB `ck_tags_level_range`), donc toute chaîne
+    # d'ancêtres est bornée.
+    tag_by_id = {tag.tag_id: tag for tag in db.query(Tag).all()}
+
+    def ancestor_ids(tag: Tag) -> set[int]:
+        chain: set[int] = set()
+        current = tag_by_id.get(tag.parent_id) if tag.parent_id is not None else None
+        while current is not None:
+            chain.add(current.tag_id)
+            current = tag_by_id.get(current.parent_id) if current.parent_id is not None else None
+        return chain
+
+    ancestors_by_tag_id = {tag.tag_id: ancestor_ids(tag) for tag in tags}
+
+    for i, tag_a in enumerate(tags):
+        for tag_b in tags[i + 1 :]:
+            if tag_b.tag_id in ancestors_by_tag_id[tag_a.tag_id]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Le Tag « {tag_a.name} » est un descendant du Tag « {tag_b.name} » : "
+                        "ambigu pour le Récap Budget Couple, ces 4 Tags doivent être "
+                        "mutuellement exclusifs."
+                    ),
+                )
+            if tag_a.tag_id in ancestors_by_tag_id[tag_b.tag_id]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Le Tag « {tag_b.name} » est un descendant du Tag « {tag_a.name} » : "
+                        "ambigu pour le Récap Budget Couple, ces 4 Tags doivent être "
+                        "mutuellement exclusifs."
+                    ),
+                )
+
+
+def _get_tag_by_exact_name(name: str, db: Session) -> Tag:
+    matches = db.query(Tag).filter(Tag.name == name).all()
+    if not matches:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Le Tag « {name} » est introuvable : requis pour le Récap Budget Couple.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Plusieurs Tags nommés « {name} » existent : ambigu, impossible de "
+                "calculer le Récap Budget Couple."
+            ),
+        )
+    return matches[0]
+
+
+def _revenus_by_exact_tag_for_calendar_months(
+    account_id: int, period_start: date, period_end: date, db: Session
+) -> tuple[dict[int, Decimal], dict[int, Tag]]:
+    # Miroir positif de `_spent_by_tag_for_period` (montants > 0, pas de abs() nécessaire
+    # puisque déjà positifs) — même logique de remontée « Tag + descendants » et même
+    # déduplication par transaction (une transaction ne compte qu'une fois par ancêtre),
+    # factorisée dans `_amount_by_tag_for_period`.
+    return _amount_by_tag_for_period(account_id, period_start, period_end, db, positive=True)
+
+
+def get_recap_couple(account_id: int, months: int, db: Session) -> RecapCoupleRead:
+    account = _get_account_or_404(account_id, db)
+    if not account.is_common:
+        raise HTTPException(
+            status_code=422,
+            detail="Le Récap Budget Couple n'est disponible que pour le Compte Commun.",
+        )
+    if months < 1:
+        raise HTTPException(status_code=422, detail="Le nombre de mois doit être un entier >= 1.")
+    if months > 120:
+        raise HTTPException(
+            status_code=422, detail="Le nombre de mois doit être un entier <= 120."
+        )
+
+    revenus_tag = _get_tag_by_exact_name("Revenus", db)
+    charges_tag = _get_tag_by_exact_name("Charges", db)
+    virements_tag = _get_tag_by_exact_name("Virements compte commun", db)
+    investissements_tag = _get_tag_by_exact_name("Investissements", db)
+    _assert_tags_mutually_exclusive(
+        [revenus_tag, charges_tag, virements_tag, investissements_tag], db
+    )
+
+    # Fenêtre de N mois calendaires stricts, se terminant au mois calendaire précédent
+    # le mois en cours — indépendante de la Période budgétaire (`start_day`) de tout
+    # Compte (cf. Design Notes, jamais `period_for`/`start_day`). Les mois étant
+    # contigus, sommer sur l'intervalle continu [period_start, period_end] équivaut à
+    # sommer mois par mois puis diviser par N : un mois sans transaction contribue
+    # naturellement 0 à la somme totale (division toujours par N, inchangée).
+    today = date.today()
+    current_month_start = today.replace(day=1)
+    last_included_month_start = _month_start_before(current_month_start, 1)
+    first_included_month_start = _month_start_before(last_included_month_start, months - 1)
+    period_start = first_included_month_start
+    next_month_after_last = add_months(last_included_month_start, 1)
+    period_end = next_month_after_last - timedelta(days=1)
+
+    personal_accounts = (
+        db.query(Account)
+        .filter(Account.is_common.is_(False))
+        .order_by(Account.account_id)
+        .all()
+    )
+
+    rows: list[RecapCoupleAccountRow] = []
+    for personal_account in personal_accounts:
+        spent, _ = _spent_by_tag_for_period(
+            personal_account.account_id, period_start, period_end, db
+        )
+        revenu, _ = _revenus_by_exact_tag_for_calendar_months(
+            personal_account.account_id, period_start, period_end, db
+        )
+
+        months_decimal = Decimal(months)
+        revenus_avg = (revenu.get(revenus_tag.tag_id, Decimal("0.00")) / months_decimal).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        charges_avg = (spent.get(charges_tag.tag_id, Decimal("0.00")) / months_decimal).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        virements_avg = (spent.get(virements_tag.tag_id, Decimal("0.00")) / months_decimal).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        investissements_avg = (
+            spent.get(investissements_tag.tag_id, Decimal("0.00")) / months_decimal
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        rows.append(
+            RecapCoupleAccountRow(
+                account_id=personal_account.account_id,
+                account_name=personal_account.name,
+                revenus=revenus_avg,
+                charges=charges_avg,
+                virements=virements_avg,
+                investissements=investissements_avg,
+                charges_plus_virements=charges_avg + virements_avg,
+                reste_a_vivre=revenus_avg - charges_avg - virements_avg - investissements_avg,
+            )
+        )
+
+    total_revenus = sum((r.revenus for r in rows), Decimal("0.00"))
+    total_charges = sum((r.charges for r in rows), Decimal("0.00"))
+    total_virements = sum((r.virements for r in rows), Decimal("0.00"))
+    total_investissements = sum((r.investissements for r in rows), Decimal("0.00"))
+    total_charges_plus_virements = sum((r.charges_plus_virements for r in rows), Decimal("0.00"))
+    total_reste_a_vivre = sum((r.reste_a_vivre for r in rows), Decimal("0.00"))
+
+    percentage = account.couple_charges_percentage
+    budget_charges_convenu = (
+        (percentage / Decimal(100) * total_revenus).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if percentage is not None
+        else None
+    )
+    reste_disponible = (
+        total_revenus - budget_charges_convenu if budget_charges_convenu is not None else None
+    )
+
+    return RecapCoupleRead(
+        account_id=account.account_id,
+        months=months,
+        period_start=period_start,
+        period_end=period_end,
+        rows=rows,
+        total_revenus=total_revenus,
+        total_charges=total_charges,
+        total_virements=total_virements,
+        total_investissements=total_investissements,
+        total_charges_plus_virements=total_charges_plus_virements,
+        total_reste_a_vivre=total_reste_a_vivre,
+        couple_charges_percentage=percentage,
+        budget_charges_convenu=budget_charges_convenu,
+        reste_disponible=reste_disponible,
+    )
+
+
+def update_couple_charges_percentage(payload: CoupleChargesPercentageUpdate, db: Session) -> Account:
+    account = _get_account_or_404(payload.account_id, db)
+    if not account.is_common:
+        raise HTTPException(
+            status_code=422,
+            detail="Le NB% de charges convenu n'est modifiable que pour le Compte Commun.",
+        )
+    account.couple_charges_percentage = payload.percentage
+    db.commit()
+    db.refresh(account)
+    return account

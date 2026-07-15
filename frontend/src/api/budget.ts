@@ -183,3 +183,54 @@ export async function getRepartitionCommune(
   const response = await fetch(`/repartition-commune?${params.toString()}`)
   return unwrap<RepartitionCommuneRead>(response)
 }
+
+export interface RecapCoupleAccountRow {
+  account_id: number
+  account_name: string
+  revenus: number
+  charges: number
+  virements: number
+  investissements: number
+  charges_plus_virements: number
+  reste_a_vivre: number
+}
+
+export interface RecapCoupleRead {
+  account_id: number
+  months: number
+  period_start: string
+  period_end: string
+  rows: RecapCoupleAccountRow[]
+  total_revenus: number
+  total_charges: number
+  total_virements: number
+  total_investissements: number
+  total_charges_plus_virements: number
+  total_reste_a_vivre: number
+  couple_charges_percentage: number | null
+  budget_charges_convenu: number | null
+  reste_disponible: number | null
+}
+
+export async function getRecapCouple(accountId: number, months: number): Promise<RecapCoupleRead> {
+  const params = new URLSearchParams({ account_id: String(accountId), months: String(months) })
+  const response = await fetch(`/budget/recap-couple?${params.toString()}`)
+  return unwrap<RecapCoupleRead>(response)
+}
+
+export interface CoupleChargesPercentageRead {
+  account_id: number
+  couple_charges_percentage: number | null
+}
+
+export async function updateCoupleChargesPercentage(
+  accountId: number,
+  percentage: number,
+): Promise<CoupleChargesPercentageRead> {
+  const response = await fetch('/budget/couple-charges-percentage', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, percentage }),
+  })
+  return unwrap<CoupleChargesPercentageRead>(response)
+}

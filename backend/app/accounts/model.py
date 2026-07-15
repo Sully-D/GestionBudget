@@ -19,3 +19,6 @@ class Account(Base):
     start_day: Mapped[int] = mapped_column(Integer, nullable=False)
     reference_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     reference_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # NB% de charges convenu (Récap Budget Couple, Compte Commun uniquement) — persisté
+    # tel quel, rechargé à chaque visite (cf. spec-recap-budget-couple-dashboard-commun.md).
+    couple_charges_percentage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)

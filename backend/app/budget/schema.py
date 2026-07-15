@@ -138,6 +138,69 @@ class RepartitionCommuneRead(BaseModel):
         return float(value)
 
 
+class RecapCoupleAccountRow(BaseModel):
+    account_id: int
+    account_name: str
+    revenus: Decimal
+    charges: Decimal
+    virements: Decimal
+    investissements: Decimal
+    charges_plus_virements: Decimal
+    reste_a_vivre: Decimal
+
+    @field_serializer(
+        "revenus",
+        "charges",
+        "virements",
+        "investissements",
+        "charges_plus_virements",
+        "reste_a_vivre",
+        when_used="json",
+    )
+    def _serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
+
+
+class RecapCoupleRead(BaseModel):
+    account_id: int
+    months: int
+    period_start: date
+    period_end: date
+    rows: list[RecapCoupleAccountRow]
+    total_revenus: Decimal
+    total_charges: Decimal
+    total_virements: Decimal
+    total_investissements: Decimal
+    total_charges_plus_virements: Decimal
+    total_reste_a_vivre: Decimal
+    couple_charges_percentage: Decimal | None
+    budget_charges_convenu: Decimal | None
+    reste_disponible: Decimal | None
+
+    @field_serializer(
+        "total_revenus",
+        "total_charges",
+        "total_virements",
+        "total_investissements",
+        "total_charges_plus_virements",
+        "total_reste_a_vivre",
+        when_used="json",
+    )
+    def _serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
+
+    @field_serializer(
+        "couple_charges_percentage", "budget_charges_convenu", "reste_disponible", when_used="json"
+    )
+    def _serialize_nullable_decimal(self, value: Decimal | None) -> float | None:
+        return float(value) if value is not None else None
+
+
+class CoupleChargesPercentageUpdate(BaseModel):
+    account_id: int
+    percentage: Decimal = Field(..., max_digits=5, decimal_places=2, ge=0, le=100)
+
+
 class DisponibleRead(BaseModel):
     account_id: int
     period_start: date

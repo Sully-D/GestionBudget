@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.accounts.router import router as accounts_router
 from app.budget.disponible_router import router as budget_disponible_router
+from app.budget.recap_couple_router import router as budget_recap_couple_router
 from app.budget.repartition_router import router as budget_repartition_router
 from app.budget.router import router as budget_router
 from app.budget.spending_router import router as budget_spending_router
@@ -49,6 +50,7 @@ app.include_router(budget_tracking_router)
 app.include_router(budget_spending_router)
 app.include_router(budget_disponible_router)
 app.include_router(budget_repartition_router)
+app.include_router(budget_recap_couple_router)
 app.include_router(import_router)
 app.include_router(projections_router)
 app.include_router(planned_expenses_router)
