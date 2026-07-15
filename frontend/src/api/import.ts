@@ -13,11 +13,6 @@ export async function importOfx(accountId: number, file: File): Promise<ImportRe
   return unwrap<ImportResult>(response)
 }
 
-export interface CsvPreviewResult {
-  columns: string[]
-  preview_rows: string[][]
-}
-
 export interface CsvColumnMapping {
   date_column: string
   montant_column: string
@@ -25,13 +20,20 @@ export interface CsvColumnMapping {
   tiers_column: string | null
 }
 
+export interface CsvPreviewResult {
+  columns: string[]
+  preview_rows: string[][]
+  saved_mapping: CsvColumnMapping | null
+}
+
 export interface CsvImportResult {
   imported_count: number
   skipped_count: number
 }
 
-export async function previewCsv(file: File): Promise<CsvPreviewResult> {
+export async function previewCsv(file: File, accountId: number): Promise<CsvPreviewResult> {
   const formData = new FormData()
+  formData.append('account_id', String(accountId))
   formData.append('file', file)
   const response = await fetch('/import/csv/preview', { method: 'POST', body: formData })
   return unwrap<CsvPreviewResult>(response)

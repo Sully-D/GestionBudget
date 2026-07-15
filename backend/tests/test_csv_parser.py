@@ -8,6 +8,7 @@ from app.import_pipeline.csv_parser import (
     CsvParseError,
     _parse_amount,
     _parse_date,
+    compute_header_signature,
     parse_csv,
     preview_csv,
 )
@@ -143,3 +144,21 @@ def test_parse_date_accepted_formats(raw):
 
 def test_parse_date_unsupported_format_returns_none():
     assert _parse_date("July 1 2026") is None
+
+
+def test_compute_header_signature_ignores_column_order():
+    assert compute_header_signature(["Date", "Montant", "Libelle"]) == compute_header_signature(
+        ["Libelle", "Date", "Montant"]
+    )
+
+
+def test_compute_header_signature_is_case_sensitive():
+    assert compute_header_signature(["Date", "Montant"]) != compute_header_signature(
+        ["date", "montant"]
+    )
+
+
+def test_compute_header_signature_differs_for_different_column_sets():
+    assert compute_header_signature(["Date", "Montant", "Libelle"]) != compute_header_signature(
+        ["Date", "Montant", "Libelle", "Tiers"]
+    )

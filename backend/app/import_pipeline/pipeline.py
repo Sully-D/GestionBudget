@@ -2,13 +2,20 @@ from datetime import date as date_
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.accounts.model import Account
-from app.import_pipeline.csv_parser import ColumnMapping, CsvParseError, CsvPreview
+from app.import_pipeline.csv_parser import (
+    ColumnMapping,
+    CsvParseError,
+    CsvPreview,
+    compute_header_signature,
+)
 from app.import_pipeline.csv_parser import preview_csv as _preview_csv
 from app.import_pipeline.csv_parser import parse_csv
 from app.import_pipeline.dedup import split_new_and_duplicates
+from app.import_pipeline.model import CsvColumnMapping
 from app.import_pipeline.ofx_parser import OfxParseError, parse_ofx
 from app.tags.model import Rule
 from app.tags.rule_engine.dispatcher import evaluate_rules_verbose
@@ -74,11 +81,40 @@ def import_ofx(account_id: int, raw: bytes, db: Session) -> tuple[int, int, list
     return len(new_transactions), duplicate_count, transaction_ids
 
 
-def preview_csv(raw: bytes) -> CsvPreview:
+def _find_saved_mapping(account_id: int, signature: str, db: Session) -> CsvColumnMapping | None:
+    return (
+        db.query(CsvColumnMapping)
+        .filter(
+            CsvColumnMapping.account_id == account_id,
+            CsvColumnMapping.header_signature == signature,
+        )
+        .one_or_none()
+    )
+
+
+def preview_csv(raw: bytes, account_id: int, db: Session) -> tuple[CsvPreview, ColumnMapping | None]:
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
+
     try:
-        return _preview_csv(raw)
+        preview = _preview_csv(raw)
     except CsvParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    signature = compute_header_signature(preview.columns)
+    existing = _find_saved_mapping(account_id, signature, db)
+    saved_mapping = (
+        ColumnMapping(
+            date_column=existing.date_column,
+            montant_column=existing.montant_column,
+            libelle_column=existing.libelle_column,
+            tiers_column=existing.tiers_column,
+        )
+        if existing is not None
+        else None
+    )
+    return preview, saved_mapping
 
 
 def import_csv(
@@ -92,6 +128,35 @@ def import_csv(
         parsed, skipped_count = parse_csv(raw, mapping)
     except CsvParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if parsed:
+        # Même fichier, donc mêmes en-têtes que ceux déjà validés par parse_csv
+        # ci-dessus : cet appel ne peut pas échouer différemment.
+        signature = compute_header_signature(_preview_csv(raw).columns)
+        # Upsert atomique (ON CONFLICT) plutôt qu'un lookup-puis-insert/update :
+        # deux imports concurrents pour le même (account_id, header_signature)
+        # ne doivent jamais se heurter à une violation de contrainte unique.
+        # Mémorisé uniquement si au moins une ligne a été importée avec succès
+        # -- un mappage qui ne produit que des lignes ignorées ne doit pas
+        # écraser un mappage mémorisé qui fonctionnait.
+        stmt = sqlite_insert(CsvColumnMapping).values(
+            account_id=account_id,
+            header_signature=signature,
+            date_column=mapping.date_column,
+            montant_column=mapping.montant_column,
+            libelle_column=mapping.libelle_column,
+            tiers_column=mapping.tiers_column,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[CsvColumnMapping.account_id, CsvColumnMapping.header_signature],
+            set_={
+                "date_column": mapping.date_column,
+                "montant_column": mapping.montant_column,
+                "libelle_column": mapping.libelle_column,
+                "tiers_column": mapping.tiers_column,
+            },
+        )
+        db.execute(stmt)
 
     rules = list_rules(db)
 

@@ -4,7 +4,12 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.import_pipeline.csv_parser import ColumnMapping
 from app.import_pipeline.pipeline import import_csv, import_ofx, preview_csv
-from app.import_pipeline.schema import CsvImportResult, CsvPreviewResult, ImportResult
+from app.import_pipeline.schema import (
+    CsvImportResult,
+    CsvPreviewResult,
+    ImportResult,
+    SavedCsvMapping,
+)
 from app.projections.rapprochement import propose_if_match
 
 router = APIRouter(prefix="/import", tags=["import"])
@@ -31,12 +36,29 @@ async def post_import_ofx(
 
 
 @router.post("/csv/preview")
-async def post_import_csv_preview(file: UploadFile = File(...)):
+async def post_import_csv_preview(
+    account_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
     _require_csv_extension(file.filename)
     raw = await file.read()
-    preview = preview_csv(raw)
+    preview, saved_mapping = preview_csv(raw, account_id, db)
     return {
-        "data": CsvPreviewResult(columns=preview.columns, preview_rows=preview.preview_rows)
+        "data": CsvPreviewResult(
+            columns=preview.columns,
+            preview_rows=preview.preview_rows,
+            saved_mapping=(
+                SavedCsvMapping(
+                    date_column=saved_mapping.date_column,
+                    montant_column=saved_mapping.montant_column,
+                    libelle_column=saved_mapping.libelle_column,
+                    tiers_column=saved_mapping.tiers_column,
+                )
+                if saved_mapping is not None
+                else None
+            ),
+        )
     }
 
 

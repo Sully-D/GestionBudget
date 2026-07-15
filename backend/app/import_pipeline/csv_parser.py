@@ -71,6 +71,15 @@ def _read_rows(text: str) -> tuple[list[dict[str, str | None]], list[str]]:
     return rows, columns
 
 
+def compute_header_signature(columns: list[str]) -> str:
+    # Tri alphabétique puis jointure par un séparateur qui ne peut apparaître
+    # dans un nom de colonne CSV réel : l'ordre des colonnes dans le fichier
+    # n'affecte jamais la correspondance de mappage (celui-ci référence des
+    # noms de colonnes, jamais des positions). Sensible à la casse par choix
+    # (cf. spec Story 3.2bis).
+    return "\x1f".join(sorted(columns))
+
+
 def preview_csv(raw: bytes) -> CsvPreview:
     text = _decode(raw)
     rows, columns = _read_rows(text)

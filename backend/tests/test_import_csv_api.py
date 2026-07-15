@@ -57,6 +57,19 @@ def account_id(client):
 
 
 @pytest.fixture
+def second_account_id(client):
+    session = next(app.dependency_overrides[get_db]())
+    try:
+        account = Account(name="Commun", is_common=True, start_day=1)
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        return account.account_id
+    finally:
+        session.close()
+
+
+@pytest.fixture
 def sample_csv_bytes():
     return (FIXTURES_DIR / "sample.csv").read_bytes()
 
@@ -70,9 +83,10 @@ def _mapping_form_fields():
     }
 
 
-def test_post_import_csv_preview_returns_columns_and_preview(client, sample_csv_bytes):
+def test_post_import_csv_preview_returns_columns_and_preview(client, account_id, sample_csv_bytes):
     response = client.post(
         "/import/csv/preview",
+        data={"account_id": account_id},
         files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
     )
     assert response.status_code == 200
@@ -84,6 +98,7 @@ def test_post_import_csv_preview_returns_columns_and_preview(client, sample_csv_
         "Beneficiaire",
     ]
     assert len(data["preview_rows"]) == 3
+    assert data["saved_mapping"] is None
 
 
 def test_post_import_csv_imports_and_counts_skipped(client, account_id, sample_csv_bytes):
@@ -138,9 +153,10 @@ def test_post_import_csv_wrong_extension_returns_400(client, account_id, sample_
     assert response.status_code == 400
 
 
-def test_post_import_csv_preview_wrong_extension_returns_400(client, sample_csv_bytes):
+def test_post_import_csv_preview_wrong_extension_returns_400(client, account_id, sample_csv_bytes):
     response = client.post(
         "/import/csv/preview",
+        data={"account_id": account_id},
         files={"file": ("sample.txt", sample_csv_bytes, "text/plain")},
     )
     assert response.status_code == 400
@@ -191,3 +207,48 @@ def test_post_import_csv_matching_recurring_creates_pending_rapprochement(
     data = pending.json()["data"]
     assert len(data) == 1
     assert data[0]["transaction_label"] == "CB CARREFOUR MARKET REIMS"
+
+
+def test_post_import_csv_then_preview_returns_saved_mapping(client, account_id, sample_csv_bytes):
+    import_response = client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert import_response.status_code == 200
+
+    preview_response = client.post(
+        "/import/csv/preview",
+        data={"account_id": account_id},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert preview_response.status_code == 200
+    assert preview_response.json()["data"]["saved_mapping"] == _mapping_form_fields()
+
+
+def test_post_import_csv_preview_unknown_account_returns_404(client, sample_csv_bytes):
+    response = client.post(
+        "/import/csv/preview",
+        data={"account_id": 999999},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert response.status_code == 404
+
+
+def test_post_import_csv_preview_different_account_has_no_saved_mapping(
+    client, account_id, second_account_id, sample_csv_bytes
+):
+    import_response = client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert import_response.status_code == 200
+
+    preview_response = client.post(
+        "/import/csv/preview",
+        data={"account_id": second_account_id},
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert preview_response.status_code == 200
+    assert preview_response.json()["data"]["saved_mapping"] is None

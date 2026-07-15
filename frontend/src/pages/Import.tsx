@@ -50,12 +50,27 @@ function Import() {
     setStep('form')
 
     if (selected && selected.name.toLowerCase().endsWith('.csv')) {
+      if (accountId === null) {
+        setError('Sélectionnez un compte avant de choisir un fichier CSV.')
+        setFile(null)
+        input.value = ''
+        return
+      }
       const requestId = ++previewRequestIdRef.current
-      previewCsv(selected)
+      previewCsv(selected, accountId)
         .then((preview) => {
           if (requestId !== previewRequestIdRef.current) return
           setCsvPreview(preview)
-          setCsvMapping(EMPTY_CSV_MAPPING)
+          setCsvMapping(
+            preview.saved_mapping
+              ? {
+                  date: preview.saved_mapping.date_column,
+                  montant: preview.saved_mapping.montant_column,
+                  libelle: preview.saved_mapping.libelle_column,
+                  tiers: preview.saved_mapping.tiers_column ?? '',
+                }
+              : EMPTY_CSV_MAPPING,
+          )
           setStep('csv-mapping')
         })
         .catch((err) => {
