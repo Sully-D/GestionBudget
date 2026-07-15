@@ -1,4 +1,5 @@
 import { Link, Route, Routes } from 'react-router'
+import { useTheme } from './hooks/useTheme'
 import Budget from './pages/Budget'
 import Comparaison from './pages/Comparaison'
 import Comptes from './pages/Comptes'
@@ -12,6 +13,8 @@ import Recurrentes from './pages/Recurrentes'
 import Transactions from './pages/Transactions'
 
 function App() {
+  const { theme, toggleTheme } = useTheme()
+
   return (
     <div className="min-h-screen bg-surface">
       <header className="flex items-center justify-between border-b border-border px-4 py-4 sm:px-4 lg:px-7">
@@ -49,6 +52,15 @@ function App() {
           >
             + Transaction
           </Link>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-pressed={theme === 'dark'}
+            aria-label={theme === 'dark' ? 'Activer le mode clair' : 'Activer le mode sombre'}
+            className="rounded-lg border border-border px-3 py-1.5 text-body text-ink-muted hover:text-ink"
+          >
+            {theme === 'dark' ? 'Mode clair' : 'Mode sombre'}
+          </button>
         </nav>
       </header>
       <Routes>

@@ -69,6 +69,33 @@
   --text-micro-label--line-height: 1.3;
 }
 
+/* Palette sombre — mêmes rôles sémantiques que le bloc @theme ci-dessus,
+   activée via la classe .dark sur <html> (voir useTheme.ts) */
+.dark {
+  --color-surface: #14171c;
+  --color-surface-panel: #1c2027;
+  --color-border: #2b303a;
+  --color-border-subtle: #232730;
+  --color-ink: #e5e7eb;
+  --color-ink-muted: #9aa1ac;
+  --color-ink-faint: #8891a0;
+  --color-sidebar-text-muted: #9aa1ac;
+  --color-accent: #4f8cff;
+  --color-accent-bg: #16233d;
+  --color-accent-border: #2f4a7a;
+  --color-positive: #34d399;
+  --color-positive-bg: #123324;
+  --color-positive-text-strong: #4ade80;
+  --color-warn: #f2b84b;
+  --color-warn-bg: #3a2a10;
+  --color-alert: #f87171;
+  --color-alert-bg: #3a1414;
+  --color-alert-border: #6b2a2a;
+  --color-alert-text-strong: #fca5a5;
+
+  color-scheme: dark;
+}
+
 body {
   font-family: var(--font-sans);
   color: var(--color-ink);
