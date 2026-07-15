@@ -8,12 +8,14 @@ from app.core.db import get_db
 from app.projections.schema import (
     RecurringCandidateRead,
     RecurringConfirmCreate,
+    RecurringFromTransactionCreate,
     RecurringRejectCreate,
     RecurringTransactionRead,
     RecurringTransactionUpdate,
 )
 from app.projections.service import (
     confirm_recurring,
+    create_recurring_from_transaction,
     delete_recurring,
     detect_recurring_candidates,
     list_recurring,
@@ -37,6 +39,14 @@ def get_recurring_candidates(
 @router.post("/confirm")
 def post_confirm_recurring(payload: RecurringConfirmCreate, db: Session = Depends(get_db)):
     recurring = confirm_recurring(payload, db)
+    return {"data": RecurringTransactionRead.model_validate(recurring)}
+
+
+@router.post("/from-transaction")
+def post_create_recurring_from_transaction(
+    payload: RecurringFromTransactionCreate, db: Session = Depends(get_db)
+):
+    recurring = create_recurring_from_transaction(payload, db)
     return {"data": RecurringTransactionRead.model_validate(recurring)}
 
 

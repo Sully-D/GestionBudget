@@ -38,6 +38,22 @@ class RecurringRejectCreate(BaseModel):
     periodicity: Periodicity
 
 
+class RecurringFromTransactionCreate(BaseModel):
+    transaction_id: int
+    label: str = Field(..., min_length=1)
+    amount: Decimal = Field(..., max_digits=12, decimal_places=2, lt=0)
+    periodicity: Periodicity
+    tag_id: int | None = None
+
+    @field_validator("label")
+    @classmethod
+    def _label_not_blank(cls, value: str) -> str:
+        trimmed = value.strip()
+        if trimmed == "":
+            raise ValueError("le Libellé ne peut pas être composé uniquement d'espaces")
+        return trimmed
+
+
 class RecurringTransactionUpdate(BaseModel):
     amount: Decimal = Field(..., max_digits=12, decimal_places=2, lt=0)
     periodicity: Periodicity

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   confirmRapprochement,
   confirmRecurring,
+  createRecurringFromTransaction,
   deleteRecurring,
   getPendingRapprochements,
   getRecurringCandidates,
@@ -18,6 +19,8 @@ import type {
 } from '../api/projections'
 import { getTags } from '../api/tags'
 import type { Tag } from '../api/tags'
+import { getTransactions } from '../api/transactions'
+import type { Transaction } from '../api/transactions'
 import { useSelectableAccounts } from '../hooks/useSelectableAccounts'
 import { existingTagId, formatMontant, tagBreadcrumb } from '../lib/format'
 
@@ -61,6 +64,19 @@ function Recurrentes() {
   const [editSubmitting, setEditSubmitting] = useState(false)
 
   const [deletingId, setDeletingId] = useState<number | null>(null)
+
+  const [addFormOpen, setAddFormOpen] = useState(false)
+  const [addTransactions, setAddTransactions] = useState<Transaction[]>([])
+  const [addTransactionsLoading, setAddTransactionsLoading] = useState(false)
+  const [addTransactionsError, setAddTransactionsError] = useState<string | null>(null)
+  const [addTransactionId, setAddTransactionId] = useState('')
+  const [addLabel, setAddLabel] = useState('')
+  const [addAmount, setAddAmount] = useState('')
+  const [addPeriodicity, setAddPeriodicity] = useState<Periodicity>('mensuelle')
+  const [addTagId, setAddTagId] = useState('')
+  const [addError, setAddError] = useState<string | null>(null)
+  const [addSubmitting, setAddSubmitting] = useState(false)
+  const addRequestIdRef = useRef(0)
 
   useEffect(() => {
     getTags().then(setTags).catch(() => undefined)
@@ -121,6 +137,10 @@ function Recurrentes() {
   }
 
   useEffect(() => {
+    // Le picker de la Transaction sélectionnée n'a plus de sens si le compte
+    // change sous le formulaire ouvert : on referme plutôt que de risquer une
+    // soumission avec un `transaction_id` d'un autre compte.
+    setAddFormOpen(false)
     if (selectedAccountId === null) {
       setCandidates([])
       setConfirmedList([])
@@ -251,6 +271,89 @@ function Recurrentes() {
     }
     setDeletingId(null)
     await refetchConfirmed(selectedAccountId)
+  }
+
+  function openAddForm() {
+    if (selectedAccountId === null) return
+    const requestId = ++addRequestIdRef.current
+    setAddFormOpen(true)
+    setAddError(null)
+    setAddTransactionId('')
+    setAddLabel('')
+    setAddAmount('')
+    setAddPeriodicity('mensuelle')
+    setAddTagId('')
+    setAddTransactionsError(null)
+    setAddTransactionsLoading(true)
+    // Picker = période courante du compte (`getTransactions(accountId)` sans
+    // `referenceDate`), filtré côté client aux dépenses (amount < 0).
+    getTransactions(selectedAccountId)
+      .then((list) => {
+        if (addRequestIdRef.current !== requestId) return
+        setAddTransactions(list.transactions.filter((t) => t.amount < 0))
+        setAddTransactionsError(null)
+      })
+      .catch((err) => {
+        if (addRequestIdRef.current !== requestId) return
+        setAddTransactionsError(err instanceof Error ? err.message : 'Erreur inattendue')
+      })
+      .finally(() => {
+        if (addRequestIdRef.current !== requestId) return
+        setAddTransactionsLoading(false)
+      })
+  }
+
+  function closeAddForm() {
+    addRequestIdRef.current += 1
+    setAddFormOpen(false)
+  }
+
+  function selectAddTransaction(transactionId: string) {
+    setAddTransactionId(transactionId)
+    const transaction = addTransactions.find((t) => String(t.transaction_id) === transactionId)
+    setAddLabel(transaction ? (transaction.payee ? transaction.payee : transaction.label) : '')
+    setAddAmount(transaction ? Math.abs(transaction.amount).toFixed(2) : '')
+    setAddError(null)
+  }
+
+  async function submitAdd() {
+    if (selectedAccountId === null) return
+    if (addTransactionId === '') {
+      setAddError('Sélectionnez une Transaction.')
+      return
+    }
+    const trimmedLabel = addLabel.trim()
+    if (trimmedLabel === '') {
+      setAddError('Le Libellé ne peut pas être composé uniquement d\'espaces.')
+      return
+    }
+    const magnitude = Number(addAmount.replace(',', '.'))
+    if (addAmount.trim() === '' || !Number.isFinite(magnitude) || magnitude <= 0) {
+      setAddError('Le Montant doit être un nombre positif.')
+      return
+    }
+    setAddSubmitting(true)
+    try {
+      await createRecurringFromTransaction({
+        transaction_id: Number(addTransactionId),
+        label: trimmedLabel,
+        amount: -Math.abs(magnitude),
+        periodicity: addPeriodicity,
+        tag_id: addTagId === '' ? null : Number(addTagId),
+      })
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : 'Erreur inattendue')
+      setAddSubmitting(false)
+      return
+    }
+    addRequestIdRef.current += 1
+    setAddSubmitting(false)
+    setAddFormOpen(false)
+    await Promise.all([
+      refetchCandidates(selectedAccountId),
+      refetchConfirmed(selectedAccountId),
+      refetchPendingRapprochements(selectedAccountId),
+    ])
   }
 
   return (
@@ -398,10 +501,121 @@ function Recurrentes() {
 
       <div className="mt-6 overflow-hidden rounded border border-border">
         <div className="border-b border-border bg-surface-panel px-4 py-3">
-          <span className="text-section-title font-bold uppercase tracking-wide text-ink-muted">
-            Récurrentes confirmées
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-section-title font-bold uppercase tracking-wide text-ink-muted">
+              Récurrentes confirmées
+            </span>
+            {!addFormOpen && (
+              <button
+                type="button"
+                onClick={openAddForm}
+                disabled={selectedAccountId === null}
+                className="text-body-strong text-accent disabled:opacity-60"
+              >
+                Ajouter une Récurrente
+              </button>
+            )}
+          </div>
         </div>
+        {addFormOpen && (
+          <div className="border-b border-border-subtle px-4 py-3">
+            <div className="flex flex-col gap-2">
+              {addTransactionsLoading && (
+                <p className="text-body text-ink-muted">Chargement des Transactions…</p>
+              )}
+              {addTransactionsError && (
+                <p className="text-body text-alert">{addTransactionsError}</p>
+              )}
+              {!addTransactionsLoading &&
+                !addTransactionsError &&
+                addTransactions.length === 0 && (
+                  <p className="text-body text-ink-muted">
+                    Aucune dépense disponible sur la période courante de ce compte.
+                  </p>
+                )}
+              {!addTransactionsLoading && !addTransactionsError && addTransactions.length > 0 && (
+                <>
+                  <select
+                    value={addTransactionId}
+                    onChange={(e) => selectAddTransaction(e.target.value)}
+                    disabled={addSubmitting}
+                    className={formFieldClass}
+                  >
+                    <option value="">Choisir une Transaction…</option>
+                    {addTransactions.map((t) => (
+                      <option key={t.transaction_id} value={t.transaction_id}>
+                        {t.date} · {t.payee ? t.payee : t.label} · {formatMontant(t.amount)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={addLabel}
+                      onChange={(e) => setAddLabel(e.target.value)}
+                      disabled={addSubmitting}
+                      placeholder="Libellé"
+                      className={formFieldClass}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addAmount}
+                      onChange={(e) => setAddAmount(e.target.value)}
+                      disabled={addSubmitting}
+                      className={formFieldClass}
+                    />
+                    <select
+                      value={addPeriodicity}
+                      onChange={(e) => setAddPeriodicity(e.target.value as Periodicity)}
+                      disabled={addSubmitting}
+                      className={formFieldClass}
+                    >
+                      {periodicities.map((p) => (
+                        <option key={p} value={p}>
+                          {periodicityLabels[p]}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={addTagId}
+                      onChange={(e) => setAddTagId(e.target.value)}
+                      disabled={addSubmitting}
+                      className={formFieldClass}
+                    >
+                      <option value="">Aucun Tag</option>
+                      {tags.map((t) => (
+                        <option key={t.tag_id} value={t.tag_id}>
+                          {tagBreadcrumb(t, tagById)}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={submitAdd}
+                      disabled={addSubmitting || addTransactionId === ''}
+                      className="text-body-strong text-accent disabled:opacity-60"
+                    >
+                      Enregistrer
+                    </button>
+                  </div>
+                </>
+              )}
+              <div>
+                <button
+                  type="button"
+                  onClick={closeAddForm}
+                  disabled={addSubmitting}
+                  className="text-body text-ink-muted disabled:opacity-60"
+                >
+                  Annuler
+                </button>
+              </div>
+              {addError && <p className="text-caption text-alert">{addError}</p>}
+            </div>
+          </div>
+        )}
         <div className="px-0 py-1">
           {confirmedError && <p className="px-4 py-3 text-body text-alert">{confirmedError}</p>}
           {confirmedLoading && (

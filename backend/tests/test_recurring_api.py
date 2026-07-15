@@ -158,6 +158,97 @@ def test_delete_recurring_returns_200_then_404(client):
     assert second_delete.status_code == 404
 
 
+def _create_current_period_transaction(client, account_id, label="Abonnement Musique"):
+    # Le picker de la spec liste les Transactions de la période courante
+    # (`getTransactions(accountId)` sans `referenceDate`) : on crée donc la
+    # Transaction avec la date du jour plutôt que de réutiliser les Transactions
+    # de janvier-avril du fixture, qui servent aux tests de détection de
+    # candidates et ne tombent pas forcément dans la période en cours.
+    response = client.post(
+        "/transactions",
+        json={
+            "account_id": account_id,
+            "date": date.today().isoformat(),
+            "amount": -50.00,
+            "label": label,
+        },
+    )
+    return response.json()["data"]
+
+
+def test_post_create_recurring_from_transaction_returns_data_envelope(client):
+    personal_id, _ = _account_ids(client)
+    tag_id = _tag_id(client)
+    transaction = _create_current_period_transaction(client, personal_id)
+    response = client.post(
+        "/recurring/from-transaction",
+        json={
+            "transaction_id": transaction["transaction_id"],
+            "label": "Abonnement Musique",
+            "amount": -50.00,
+            "periodicity": "mensuelle",
+            "tag_id": tag_id,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "confirmed"
+    assert data["label"] == "Abonnement Musique"
+    assert data["tag_id"] == tag_id
+    assert isinstance(data["amount"], float)
+
+
+def test_post_create_recurring_from_transaction_duplicate_signature_returns_422(client):
+    personal_id, _ = _account_ids(client)
+    first = _create_current_period_transaction(client, personal_id)
+    second = _create_current_period_transaction(client, personal_id)
+    client.post(
+        "/recurring/from-transaction",
+        json={
+            "transaction_id": first["transaction_id"],
+            "label": "Abonnement Musique",
+            "amount": -50.00,
+            "periodicity": "mensuelle",
+        },
+    )
+    response = client.post(
+        "/recurring/from-transaction",
+        json={
+            "transaction_id": second["transaction_id"],
+            "label": "Abonnement Musique",
+            "amount": -50.00,
+            "periodicity": "mensuelle",
+        },
+    )
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+
+
+def test_post_create_recurring_from_transaction_positive_transaction_amount_returns_422(client):
+    personal_id, _ = _account_ids(client)
+    transaction_response = client.post(
+        "/transactions",
+        json={
+            "account_id": personal_id,
+            "date": date.today().isoformat(),
+            "amount": 1500.00,
+            "label": "Salaire",
+        },
+    )
+    transaction = transaction_response.json()["data"]
+    response = client.post(
+        "/recurring/from-transaction",
+        json={
+            "transaction_id": transaction["transaction_id"],
+            "label": "Salaire",
+            "amount": -1500.00,
+            "periodicity": "mensuelle",
+        },
+    )
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+
+
 def test_get_recurring_transactions_filters_by_status(client):
     personal_id, _ = _account_ids(client)
     candidate = client.get(

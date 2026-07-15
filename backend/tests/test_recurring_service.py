@@ -11,11 +11,13 @@ from app.core.db import Base
 from app.projections.model import RecurringTransaction
 from app.projections.schema import (
     RecurringConfirmCreate,
+    RecurringFromTransactionCreate,
     RecurringRejectCreate,
     RecurringTransactionUpdate,
 )
 from app.projections.service import (
     confirm_recurring,
+    create_recurring_from_transaction,
     delete_recurring,
     detect_recurring_candidates,
     list_recurring,
@@ -312,6 +314,131 @@ def test_update_recurring_unknown_id_returns_404(db):
 def test_delete_recurring_unknown_id_returns_404(db):
     with pytest.raises(HTTPException) as exc_info:
         delete_recurring(999, db)
+    assert exc_info.value.status_code == 404
+
+
+def test_create_recurring_from_transaction_creates_confirmed_row(db):
+    account = _add_account(db)
+    tag = _add_tag(db)
+    transaction = _add_transaction(
+        db, account.account_id, date(2026, 5, 12), Decimal("-19.99"), "Abonnement Musique"
+    )
+    recurring = create_recurring_from_transaction(
+        RecurringFromTransactionCreate(
+            transaction_id=transaction.transaction_id,
+            label="Abonnement Musique",
+            amount=Decimal("-19.99"),
+            periodicity="mensuelle",
+            tag_id=tag.tag_id,
+        ),
+        db,
+    )
+    assert recurring.status == "confirmed"
+    assert recurring.account_id == account.account_id
+    assert recurring.amount == Decimal("-19.99")
+    assert recurring.periodicity == "mensuelle"
+    assert recurring.tag_id == tag.tag_id
+    assert recurring.signature == "abonnement musique"
+
+
+def test_create_recurring_from_transaction_positive_amount_returns_422(db):
+    account = _add_account(db)
+    transaction = _add_transaction(
+        db, account.account_id, date(2026, 5, 12), Decimal("1500.00"), "Salaire"
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_recurring_from_transaction(
+            RecurringFromTransactionCreate(
+                transaction_id=transaction.transaction_id,
+                label="Salaire",
+                amount=Decimal("-1500.00"),
+                periodicity="mensuelle",
+            ),
+            db,
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_create_recurring_from_transaction_duplicate_signature_returns_422(db):
+    account = _add_account(db)
+    transaction = _add_transaction(
+        db, account.account_id, date(2026, 5, 12), Decimal("-19.99"), "Abonnement Musique"
+    )
+    create_recurring_from_transaction(
+        RecurringFromTransactionCreate(
+            transaction_id=transaction.transaction_id,
+            label="Abonnement Musique",
+            amount=Decimal("-19.99"),
+            periodicity="mensuelle",
+        ),
+        db,
+    )
+    other_transaction = _add_transaction(
+        db, account.account_id, date(2026, 6, 12), Decimal("-19.99"), "Abonnement Musique"
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_recurring_from_transaction(
+            RecurringFromTransactionCreate(
+                transaction_id=other_transaction.transaction_id,
+                label="Autre libellé saisi",
+                amount=Decimal("-19.99"),
+                periodicity="mensuelle",
+            ),
+            db,
+        )
+    assert exc_info.value.status_code == 422
+    assert "Abonnement Musique" in exc_info.value.detail
+    assert "Autre libellé saisi" not in exc_info.value.detail
+
+
+def test_create_recurring_from_transaction_on_common_account_returns_422(db):
+    account = _add_account(db, is_common=True, name="Commun")
+    transaction = _add_transaction(
+        db, account.account_id, date(2026, 5, 12), Decimal("-19.99"), "Abonnement Musique"
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_recurring_from_transaction(
+            RecurringFromTransactionCreate(
+                transaction_id=transaction.transaction_id,
+                label="Abonnement Musique",
+                amount=Decimal("-19.99"),
+                periodicity="mensuelle",
+            ),
+            db,
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_create_recurring_from_transaction_unknown_tag_returns_404(db):
+    account = _add_account(db)
+    transaction = _add_transaction(
+        db, account.account_id, date(2026, 5, 12), Decimal("-19.99"), "Abonnement Musique"
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_recurring_from_transaction(
+            RecurringFromTransactionCreate(
+                transaction_id=transaction.transaction_id,
+                label="Abonnement Musique",
+                amount=Decimal("-19.99"),
+                periodicity="mensuelle",
+                tag_id=999,
+            ),
+            db,
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_create_recurring_from_transaction_unknown_transaction_returns_404(db):
+    with pytest.raises(HTTPException) as exc_info:
+        create_recurring_from_transaction(
+            RecurringFromTransactionCreate(
+                transaction_id=999,
+                label="Abonnement Musique",
+                amount=Decimal("-19.99"),
+                periodicity="mensuelle",
+            ),
+            db,
+        )
     assert exc_info.value.status_code == 404
 
 

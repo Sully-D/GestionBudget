@@ -16,6 +16,7 @@ from app.projections.schema import (
     ProjectionItemRead,
     RecurringCandidateRead,
     RecurringConfirmCreate,
+    RecurringFromTransactionCreate,
     RecurringRejectCreate,
     RecurringTransactionUpdate,
 )
@@ -168,6 +169,53 @@ def confirm_recurring(payload: RecurringConfirmCreate, db: Session) -> Recurring
         account_id=payload.account_id,
         tag_id=payload.tag_id,
         signature=payload.signature,
+        label=payload.label,
+        amount=payload.amount,
+        periodicity=payload.periodicity,
+        status="confirmed",
+    )
+    db.add(recurring)
+    db.commit()
+    db.refresh(recurring)
+    return recurring
+
+
+def create_recurring_from_transaction(
+    payload: RecurringFromTransactionCreate, db: Session
+) -> RecurringTransaction:
+    transaction = db.get(Transaction, payload.transaction_id)
+    if transaction is None:
+        raise HTTPException(
+            status_code=404, detail=f"Transaction {payload.transaction_id} introuvable"
+        )
+    _get_personal_account_or_404(transaction.account_id, db)
+    if transaction.amount >= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Seule une dépense (montant négatif) peut devenir une Récurrente",
+        )
+    if payload.tag_id is not None:
+        _get_tag_or_404(payload.tag_id, db)
+
+    signature = _signature_for_transaction(transaction)
+    duplicate = (
+        db.query(RecurringTransaction)
+        .filter(
+            RecurringTransaction.account_id == transaction.account_id,
+            RecurringTransaction.signature == signature,
+        )
+        .first()
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Récurrente déjà existante pour cette signature (« {duplicate.label} »)",
+        )
+
+    recurring = RecurringTransaction(
+        account_id=transaction.account_id,
+        tag_id=payload.tag_id,
+        signature=signature,
         label=payload.label,
         amount=payload.amount,
         periodicity=payload.periodicity,

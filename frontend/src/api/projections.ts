@@ -45,6 +45,14 @@ export interface RecurringUpdatePayload {
   tag_id?: number | null
 }
 
+export interface RecurringFromTransactionPayload {
+  transaction_id: number
+  label: string
+  amount: number
+  periodicity: Periodicity
+  tag_id?: number | null
+}
+
 export async function getRecurringCandidates(
   accountId: number,
   tolerancePercentage = 10,
@@ -72,6 +80,17 @@ export async function rejectRecurring(
   payload: RecurringRejectPayload,
 ): Promise<RecurringTransaction> {
   const response = await fetch('/recurring/reject', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return unwrap<RecurringTransaction>(response)
+}
+
+export async function createRecurringFromTransaction(
+  payload: RecurringFromTransactionPayload,
+): Promise<RecurringTransaction> {
+  const response = await fetch('/recurring/from-transaction', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
