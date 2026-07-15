@@ -1,16 +1,37 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.import_pipeline.csv_parser import ColumnMapping
-from app.import_pipeline.pipeline import import_csv, import_ofx, preview_csv
+from app.import_pipeline.dedup import RowDecision
+from app.import_pipeline.pipeline import CsvImportPending, import_csv, import_ofx, preview_csv
 from app.import_pipeline.schema import (
+    AmbiguousCsvRowOut,
     CsvImportResult,
+    CsvPendingReview,
     CsvPreviewResult,
+    CsvRowResolution,
     ImportResult,
     SavedCsvMapping,
 )
 from app.projections.rapprochement import propose_if_match
+
+_RESOLUTIONS_ADAPTER = TypeAdapter(list[CsvRowResolution])
+
+
+def _parse_resolutions(raw: str | None) -> dict[int, RowDecision] | None:
+    if raw is None:
+        return None
+    try:
+        items = _RESOLUTIONS_ADAPTER.validate_json(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Paramètre resolutions invalide.") from exc
+    if len(items) != len({item.row_index for item in items}):
+        raise HTTPException(
+            status_code=400, detail="Paramètre resolutions invalide : row_index en double."
+        )
+    return {item.row_index: item.decision for item in items}
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -69,6 +90,7 @@ async def post_import_csv(
     montant_column: str = Form(...),
     libelle_column: str = Form(...),
     tiers_column: str | None = Form(None),
+    resolutions: str | None = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -80,9 +102,33 @@ async def post_import_csv(
         libelle_column=libelle_column,
         tiers_column=tiers_column or None,
     )
-    imported_count, skipped_count, transaction_ids = import_csv(account_id, raw, mapping, db)
-    for transaction_id in transaction_ids:
+    parsed_resolutions = _parse_resolutions(resolutions)
+    outcome = import_csv(account_id, raw, mapping, db, parsed_resolutions)
+
+    if isinstance(outcome, CsvImportPending):
+        return {
+            "data": CsvPendingReview(
+                ambiguous_rows=[
+                    AmbiguousCsvRowOut(
+                        row_index=row.row_index,
+                        date=row.date,
+                        amount=row.amount,
+                        label=row.label,
+                        payee=row.payee,
+                        existing_label=row.existing_label,
+                        existing_payee=row.existing_payee,
+                    )
+                    for row in outcome.ambiguous_rows
+                ]
+            )
+        }
+
+    for transaction_id in outcome.transaction_ids:
         propose_if_match(transaction_id, db)
     return {
-        "data": CsvImportResult(imported_count=imported_count, skipped_count=skipped_count)
+        "data": CsvImportResult(
+            imported_count=outcome.imported_count,
+            skipped_count=outcome.skipped_count,
+            duplicate_count=outcome.duplicate_count,
+        )
     }

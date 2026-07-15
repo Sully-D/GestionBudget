@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import date as date_
 from decimal import Decimal
 
@@ -14,13 +15,31 @@ from app.import_pipeline.csv_parser import (
 )
 from app.import_pipeline.csv_parser import preview_csv as _preview_csv
 from app.import_pipeline.csv_parser import parse_csv
-from app.import_pipeline.dedup import split_new_and_duplicates
+from app.import_pipeline.dedup import (
+    AmbiguousCsvRow,
+    RowDecision,
+    split_csv_duplicates_and_ambiguous,
+    split_new_and_duplicates,
+)
 from app.import_pipeline.model import CsvColumnMapping
 from app.import_pipeline.ofx_parser import OfxParseError, parse_ofx
 from app.tags.model import Rule
 from app.tags.rule_engine.dispatcher import evaluate_rules_verbose
 from app.tags.service import list_rules
 from app.transactions.model import Transaction, TransactionTag
+
+
+@dataclass
+class CsvImportPersisted:
+    imported_count: int
+    skipped_count: int
+    duplicate_count: int
+    transaction_ids: list[int]
+
+
+@dataclass
+class CsvImportPending:
+    ambiguous_rows: list[AmbiguousCsvRow]
 
 
 def _persist_and_tag(
@@ -118,8 +137,12 @@ def preview_csv(raw: bytes, account_id: int, db: Session) -> tuple[CsvPreview, C
 
 
 def import_csv(
-    account_id: int, raw: bytes, mapping: ColumnMapping, db: Session
-) -> tuple[int, int, list[int]]:
+    account_id: int,
+    raw: bytes,
+    mapping: ColumnMapping,
+    db: Session,
+    resolutions: dict[int, RowDecision] | None = None,
+) -> CsvImportPersisted | CsvImportPending:
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
@@ -129,16 +152,26 @@ def import_csv(
     except CsvParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if parsed:
+    to_persist, duplicate_count, pending = split_csv_duplicates_and_ambiguous(
+        parsed, mapping, account_id, db, resolutions
+    )
+
+    # Tant qu'il reste une ligne ambiguë non résolue, rien n'est écrit (ni
+    # transactions, ni mappage mémorisé) -- cf. Boundaries du spec.
+    if pending:
+        return CsvImportPending(ambiguous_rows=pending)
+
+    if to_persist:
         # Même fichier, donc mêmes en-têtes que ceux déjà validés par parse_csv
         # ci-dessus : cet appel ne peut pas échouer différemment.
         signature = compute_header_signature(_preview_csv(raw).columns)
         # Upsert atomique (ON CONFLICT) plutôt qu'un lookup-puis-insert/update :
         # deux imports concurrents pour le même (account_id, header_signature)
         # ne doivent jamais se heurter à une violation de contrainte unique.
-        # Mémorisé uniquement si au moins une ligne a été importée avec succès
-        # -- un mappage qui ne produit que des lignes ignorées ne doit pas
-        # écraser un mappage mémorisé qui fonctionnait.
+        # Mémorisé uniquement si au moins une transaction a été réellement
+        # persistée par cet appel (Story 3.2 + spec dédup CSV : un appel qui
+        # ne produit que des lignes ignorées/dupliquées ne doit pas écraser un
+        # mappage mémorisé qui fonctionnait).
         stmt = sqlite_insert(CsvColumnMapping).values(
             account_id=account_id,
             header_signature=signature,
@@ -160,12 +193,16 @@ def import_csv(
 
     rules = list_rules(db)
 
-    # pas de fitid : les imports CSV n'ont pas de clé de déduplication (AC #5)
     transaction_ids = _persist_and_tag(
         account_id,
-        [(item.date, item.amount, item.label, item.payee, None) for item in parsed],
+        [(item.date, item.amount, item.label, item.payee, None) for item in to_persist],
         rules,
         db,
     )
 
-    return len(parsed), skipped_count, transaction_ids
+    return CsvImportPersisted(
+        imported_count=len(to_persist),
+        skipped_count=skipped_count,
+        duplicate_count=duplicate_count,
+        transaction_ids=transaction_ids,
+    )

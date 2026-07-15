@@ -4,8 +4,22 @@ import { useNavigate } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
 import { importCsv, importOfx, previewCsv } from '../api/import'
-import type { CsvImportResult, CsvPreviewResult, ImportResult } from '../api/import'
+import type {
+  AmbiguousCsvRow,
+  CsvImportResult,
+  CsvPendingReview,
+  CsvPreviewResult,
+  CsvRowResolution,
+  ImportResult,
+} from '../api/import'
 import CsvColumnMapping from '../components/CsvColumnMapping'
+import CsvDuplicateReview from '../components/CsvDuplicateReview'
+
+function isPendingReview(
+  result: CsvImportResult | CsvPendingReview,
+): result is CsvPendingReview {
+  return 'pending_review' in result
+}
 
 const formFieldClass =
   'rounded border border-border bg-surface-panel px-3 py-2 text-body text-ink focus:border-accent focus:outline-none focus:shadow-[0_0_0_3px_rgba(37,99,235,0.12)]'
@@ -24,9 +38,11 @@ function Import() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<ImportSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [step, setStep] = useState<'form' | 'csv-mapping'>('form')
+  const [step, setStep] = useState<'form' | 'csv-mapping' | 'csv-review'>('form')
   const [csvPreview, setCsvPreview] = useState<CsvPreviewResult | null>(null)
   const [csvMapping, setCsvMapping] = useState<CsvMappingState>(EMPTY_CSV_MAPPING)
+  const [ambiguousRows, setAmbiguousRows] = useState<AmbiguousCsvRow[]>([])
+  const [decisions, setDecisions] = useState<Record<number, 'import' | 'ignore'>>({})
   const submittingRef = useRef(false)
   const previewRequestIdRef = useRef(0)
 
@@ -47,6 +63,8 @@ function Import() {
     setFile(selected)
     setError(null)
     setCsvPreview(null)
+    setAmbiguousRows([])
+    setDecisions({})
     setStep('form')
 
     if (selected && selected.name.toLowerCase().endsWith('.csv')) {
@@ -99,18 +117,29 @@ function Import() {
     }
   }
 
-  async function handleCsvImport() {
+  async function handleCsvImport(resolutions?: CsvRowResolution[]) {
     if (file === null || accountId === null || submittingRef.current) return
     submittingRef.current = true
     setSubmitting(true)
     setError(null)
     try {
-      const importResult = await importCsv(accountId, file, {
-        date_column: csvMapping.date,
-        montant_column: csvMapping.montant,
-        libelle_column: csvMapping.libelle,
-        tiers_column: csvMapping.tiers || null,
-      })
+      const importResult = await importCsv(
+        accountId,
+        file,
+        {
+          date_column: csvMapping.date,
+          montant_column: csvMapping.montant,
+          libelle_column: csvMapping.libelle,
+          tiers_column: csvMapping.tiers || null,
+        },
+        resolutions,
+      )
+      if (isPendingReview(importResult)) {
+        setAmbiguousRows(importResult.ambiguous_rows)
+        setDecisions({})
+        setStep('csv-review')
+        return
+      }
       setResult({ kind: 'csv', ...importResult })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur inattendue')
@@ -118,6 +147,18 @@ function Import() {
       submittingRef.current = false
       setSubmitting(false)
     }
+  }
+
+  function handleDecideAmbiguousRow(rowIndex: number, decision: 'import' | 'ignore') {
+    setDecisions((prev) => ({ ...prev, [rowIndex]: decision }))
+  }
+
+  function handleConfirmReview() {
+    const resolutions: CsvRowResolution[] = ambiguousRows.map((row) => ({
+      row_index: row.row_index,
+      decision: decisions[row.row_index],
+    }))
+    void handleCsvImport(resolutions)
   }
 
   if (result !== null) {
@@ -133,15 +174,18 @@ function Import() {
           </div>
           <div className="rounded-lg border border-border p-4">
             <div className="mb-2 h-[26px] w-[26px] rounded-md bg-surface-panel" aria-hidden="true" />
-            <div className="font-mono text-stat-value text-ink">
-              {result.kind === 'ofx' ? result.duplicate_count : result.skipped_count}
-            </div>
+            <div className="font-mono text-stat-value text-ink">{result.duplicate_count}</div>
             <div className="mt-0.5 text-caption text-ink-muted">
-              {result.kind === 'ofx'
-                ? 'Doublons ignorés (FITID déjà connus)'
-                : 'Lignes ignorées (invalides)'}
+              {result.kind === 'ofx' ? 'Doublons ignorés (FITID déjà connus)' : 'Doublons ignorés'}
             </div>
           </div>
+          {result.kind === 'csv' && (
+            <div className="rounded-lg border border-border p-4">
+              <div className="mb-2 h-[26px] w-[26px] rounded-md bg-surface-panel" aria-hidden="true" />
+              <div className="font-mono text-stat-value text-ink">{result.skipped_count}</div>
+              <div className="mt-0.5 text-caption text-ink-muted">Lignes ignorées (invalides)</div>
+            </div>
+          )}
         </div>
 
         <button
@@ -155,6 +199,26 @@ function Import() {
     )
   }
 
+  if (step === 'csv-review') {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-6 sm:px-4 lg:px-7">
+        <CsvDuplicateReview
+          fileName={file?.name ?? ''}
+          ambiguousRows={ambiguousRows}
+          decisions={decisions}
+          onDecide={handleDecideAmbiguousRow}
+          onSubmit={handleConfirmReview}
+          submitting={submitting}
+        />
+        {error && (
+          <p role="alert" className="mt-4 text-body text-alert">
+            {error}
+          </p>
+        )}
+      </main>
+    )
+  }
+
   if (step === 'csv-mapping' && csvPreview !== null) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-6 sm:px-4 lg:px-7">
@@ -164,7 +228,7 @@ function Import() {
           previewRows={csvPreview.preview_rows}
           mapping={csvMapping}
           onChange={(field, value) => setCsvMapping((prev) => ({ ...prev, [field]: value }))}
-          onSubmit={handleCsvImport}
+          onSubmit={() => handleCsvImport()}
           submitting={submitting}
         />
         {error && (

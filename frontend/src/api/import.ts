@@ -29,6 +29,27 @@ export interface CsvPreviewResult {
 export interface CsvImportResult {
   imported_count: number
   skipped_count: number
+  duplicate_count: number
+}
+
+export interface AmbiguousCsvRow {
+  row_index: number
+  date: string
+  amount: number
+  label: string
+  payee: string | null
+  existing_label: string
+  existing_payee: string | null
+}
+
+export interface CsvPendingReview {
+  pending_review: true
+  ambiguous_rows: AmbiguousCsvRow[]
+}
+
+export interface CsvRowResolution {
+  row_index: number
+  decision: 'import' | 'ignore'
 }
 
 export async function previewCsv(file: File, accountId: number): Promise<CsvPreviewResult> {
@@ -43,14 +64,18 @@ export async function importCsv(
   accountId: number,
   file: File,
   mapping: CsvColumnMapping,
-): Promise<CsvImportResult> {
+  resolutions?: CsvRowResolution[],
+): Promise<CsvImportResult | CsvPendingReview> {
   const formData = new FormData()
   formData.append('account_id', String(accountId))
   formData.append('date_column', mapping.date_column)
   formData.append('montant_column', mapping.montant_column)
   formData.append('libelle_column', mapping.libelle_column)
   if (mapping.tiers_column) formData.append('tiers_column', mapping.tiers_column)
+  if (resolutions && resolutions.length > 0) {
+    formData.append('resolutions', JSON.stringify(resolutions))
+  }
   formData.append('file', file)
   const response = await fetch('/import/csv', { method: 'POST', body: formData })
-  return unwrap<CsvImportResult>(response)
+  return unwrap<CsvImportResult | CsvPendingReview>(response)
 }

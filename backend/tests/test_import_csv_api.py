@@ -108,13 +108,13 @@ def test_post_import_csv_imports_and_counts_skipped(client, account_id, sample_c
         files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
     )
     assert response.status_code == 200
-    assert response.json()["data"] == {"imported_count": 3, "skipped_count": 1}
+    assert response.json()["data"] == {"imported_count": 3, "skipped_count": 1, "duplicate_count": 0}
 
     transactions = client.get(f"/transactions?account_id={account_id}").json()["data"]["transactions"]
     assert len(transactions) == 3
 
 
-def test_post_import_csv_reimport_creates_duplicates(client, account_id, sample_csv_bytes):
+def test_post_import_csv_reimport_same_file_ignores_all_as_duplicates(client, account_id, sample_csv_bytes):
     first = client.post(
         "/import/csv",
         data={"account_id": account_id, **_mapping_form_fields()},
@@ -127,10 +127,103 @@ def test_post_import_csv_reimport_creates_duplicates(client, account_id, sample_
     )
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["data"] == {"imported_count": 3, "skipped_count": 1}
+    assert second.json()["data"] == {"imported_count": 0, "skipped_count": 1, "duplicate_count": 3}
 
     transactions = client.get(f"/transactions?account_id={account_id}").json()["data"]["transactions"]
-    assert len(transactions) == 6
+    assert len(transactions) == 3
+
+
+def test_post_import_csv_ambiguous_row_returns_pending_review(client, account_id):
+    existing_csv = (
+        "Date_Operation;Montant_EUR;Libelle_Complet;Beneficiaire\n"
+        "01/07/2026;-10,00;CARREFOUR;Carrefour\n"
+    ).encode("utf-8")
+    client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("first.csv", existing_csv, "text/csv")},
+    )
+
+    ambiguous_csv = (
+        "Date_Operation;Montant_EUR;Libelle_Complet;Beneficiaire\n"
+        "01/07/2026;-10,00;CARREFOUR MARKET;Carrefour\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("second.csv", ambiguous_csv, "text/csv")},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["pending_review"] is True
+    assert len(data["ambiguous_rows"]) == 1
+    assert data["ambiguous_rows"][0]["row_index"] == 0
+    assert data["ambiguous_rows"][0]["existing_label"] == "CARREFOUR"
+
+    transactions = client.get(f"/transactions?account_id={account_id}").json()["data"]["transactions"]
+    assert len(transactions) == 1
+
+
+def test_post_import_csv_ambiguous_row_resolved_import_persists_it(client, account_id):
+    existing_csv = (
+        "Date_Operation;Montant_EUR;Libelle_Complet;Beneficiaire\n"
+        "01/07/2026;-10,00;CARREFOUR;Carrefour\n"
+    ).encode("utf-8")
+    client.post(
+        "/import/csv",
+        data={"account_id": account_id, **_mapping_form_fields()},
+        files={"file": ("first.csv", existing_csv, "text/csv")},
+    )
+
+    ambiguous_csv = (
+        "Date_Operation;Montant_EUR;Libelle_Complet;Beneficiaire\n"
+        "01/07/2026;-10,00;CARREFOUR MARKET;Carrefour\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/import/csv",
+        data={
+            "account_id": account_id,
+            **_mapping_form_fields(),
+            "resolutions": '[{"row_index": 0, "decision": "import"}]',
+        },
+        files={"file": ("second.csv", ambiguous_csv, "text/csv")},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"] == {"imported_count": 1, "skipped_count": 0, "duplicate_count": 0}
+
+    transactions = client.get(f"/transactions?account_id={account_id}").json()["data"]["transactions"]
+    assert len(transactions) == 2
+
+
+def test_post_import_csv_invalid_resolutions_returns_400(client, account_id, sample_csv_bytes):
+    response = client.post(
+        "/import/csv",
+        data={
+            "account_id": account_id,
+            **_mapping_form_fields(),
+            "resolutions": "pas-du-json-valide",
+        },
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert response.status_code == 400
+
+
+def test_post_import_csv_duplicate_row_index_in_resolutions_returns_400(
+    client, account_id, sample_csv_bytes
+):
+    response = client.post(
+        "/import/csv",
+        data={
+            "account_id": account_id,
+            **_mapping_form_fields(),
+            "resolutions": (
+                '[{"row_index": 0, "decision": "import"}, '
+                '{"row_index": 0, "decision": "ignore"}]'
+            ),
+        },
+        files={"file": ("sample.csv", sample_csv_bytes, "text/csv")},
+    )
+    assert response.status_code == 400
 
 
 def test_post_import_csv_missing_required_field_returns_422(client, account_id, sample_csv_bytes):
