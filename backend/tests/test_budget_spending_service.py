@@ -91,6 +91,35 @@ def test_reimbursement_on_charges_tag_nets_against_spent(db):
     assert row.spent == Decimal("10.00")
 
 
+def test_retrait_partiel_investissements_nette_sans_plancher(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements")
+    today = date.today()
+    period_start = _current_period_start(today)
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("100.00"), today)
+
+    result = get_tag_spending(account.account_id, period_start, db)
+
+    row = next(r for r in result if r.tag_id == investissements.tag_id)
+    assert row.spent == Decimal("300.00")
+
+
+def test_retrait_excedentaire_investissements_devient_negatif(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements")
+    today = date.today()
+    period_start = _current_period_start(today)
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("500.00"), today)
+
+    result = get_tag_spending(account.account_id, period_start, db)
+
+    row = next(r for r in result if r.tag_id == investissements.tag_id)
+    # Contrairement à Charges, pas de plancher à 0€.
+    assert row.spent == Decimal("-100.00")
+
+
 def test_parent_aggregates_direct_plus_children_three_levels(db):
     account = _add_account(db)
     grandparent = _add_tag(db, name="Vie quotidienne", level=1)

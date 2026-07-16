@@ -375,6 +375,165 @@ def test_reimbursement_tagged_on_charges_and_unrelated_tag_nets_only_charges(db)
     assert by_id[loisirs.tag_id].spent == Decimal("30.00")
 
 
+def test_retrait_partiel_investissements_nette_sans_plancher(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("100.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    assert by_id[investissements.tag_id].spent == Decimal("300.00")
+
+
+def test_retrait_excedentaire_investissements_devient_negatif(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+    # Cible ajoutée pour garder le tag visible même si `spent` finit à 0€ ;
+    # ici surtout pour rester cohérent avec le pattern des tests Charges.
+    upsert_budget_target(
+        BudgetTargetUpsert(
+            account_id=account.account_id, tag_id=investissements.tag_id, percentage=Decimal("10.00")
+        ),
+        db,
+    )
+
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("500.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    # Contrairement à Charges, pas de plancher à 0€ : le retrait excédentaire
+    # se traduit par un total négatif.
+    assert by_id[investissements.tag_id].spent == Decimal("-100.00")
+
+
+def test_retrait_sur_tag_hors_arbre_investissements_est_ignore(db):
+    account = _add_account(db)
+    loisirs = _add_tag(db, name="Loisirs", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, loisirs, Decimal("-20.00"), today)
+    _add_expense(db, account, loisirs, Decimal("15.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    assert by_id[loisirs.tag_id].spent == Decimal("20.00")
+
+
+def test_remboursement_charges_et_retrait_investissements_sans_interference(db):
+    account = _add_account(db)
+    charges = _add_tag(db, name="Charges", level=1)
+    investissements = _add_tag(db, name="Investissements", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+    # Cible ajoutée pour garder "Charges" visible dans le résultat même à 0€
+    # net (sans Cible, un tag à `spent == 0` est exclu de `included_tag_ids`).
+    upsert_budget_target(
+        BudgetTargetUpsert(account_id=account.account_id, tag_id=charges.tag_id, percentage=Decimal("10.00")),
+        db,
+    )
+
+    _add_expense(db, account, charges, Decimal("-30.00"), today)
+    _add_expense(db, account, charges, Decimal("50.00"), today)
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("500.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    # Charges reste plancherisée à 0€ (remboursement excédentaire) tandis
+    # qu'Investissements devient négatif (retrait excédentaire) : les deux
+    # scopes de netting ne s'interfèrent pas.
+    assert by_id[charges.tag_id].spent == Decimal("0.00")
+    assert by_id[investissements.tag_id].spent == Decimal("-100.00")
+
+
+def test_investissements_imbriquee_sous_charges_priorite_au_plancher_charges(db):
+    # Configuration atypique (non empêchée à la création des tags) où le tag
+    # "Investissements" est nesté sous "Charges" : la branche Charges est
+    # vérifiée en premier dans `_spent_by_tag_for_period` et l'emporte
+    # silencieusement sur la branche Investissements -- comportement
+    # documenté (Design Notes du spec), verrouillé ici par un test.
+    account = _add_account(db)
+    charges = _add_tag(db, name="Charges", level=1)
+    investissements = _add_tag(db, name="Investissements", parent_id=charges.tag_id, level=2)
+    today = date.today()
+    period_start = _current_period_start(today)
+    # Cible ajoutée pour garder le tag visible dans le résultat même à 0€ net
+    # (sans Cible, un tag à `spent == 0` est exclu de `included_tag_ids`).
+    upsert_budget_target(
+        BudgetTargetUpsert(
+            account_id=account.account_id, tag_id=investissements.tag_id, percentage=Decimal("10.00")
+        ),
+        db,
+    )
+
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("500.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    # Plancher à 0€ de Charges appliqué, pas le comportement négatif attendu
+    # d'Investissements isolé.
+    assert by_id[investissements.tag_id].spent == Decimal("0.00")
+
+
+def test_retrait_egal_au_versement_investissements_donne_zero_exact(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements", level=1)
+    today = date.today()
+    period_start = _current_period_start(today)
+    # Cible ajoutée pour garder le tag visible dans le résultat même à 0€ net
+    # (sans Cible, un tag à `spent == 0` est exclu de `included_tag_ids`).
+    upsert_budget_target(
+        BudgetTargetUpsert(
+            account_id=account.account_id, tag_id=investissements.tag_id, percentage=Decimal("10.00")
+        ),
+        db,
+    )
+
+    _add_expense(db, account, investissements, Decimal("-400.00"), today)
+    _add_expense(db, account, investissements, Decimal("400.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    assert by_id[investissements.tag_id].spent == Decimal("0.00")
+
+
+def test_retrait_sur_sous_tag_investissements_niveau_3_nette_sans_plancher(db):
+    account = _add_account(db)
+    investissements = _add_tag(db, name="Investissements", level=1)
+    epargne = _add_tag(db, name="Épargne", parent_id=investissements.tag_id, level=2)
+    livret_a = _add_tag(db, name="Livret A", parent_id=epargne.tag_id, level=3)
+    today = date.today()
+    period_start = _current_period_start(today)
+
+    _add_expense(db, account, livret_a, Decimal("-400.00"), today)
+    _add_expense(db, account, livret_a, Decimal("500.00"), today)
+
+    result = get_tag_tracking(account.account_id, period_start, db)
+    by_id = {r.tag_id: r for r in result}
+
+    # Le netting sans plancher remonte correctement jusqu'à la racine
+    # "Investissements" (niveau 1) en passant par le sous-tag intermédiaire
+    # (niveau 2), à la profondeur maximale autorisée (MAX_LEVEL=3).
+    assert by_id[livret_a.tag_id].spent == Decimal("-100.00")
+    assert by_id[epargne.tag_id].spent == Decimal("-100.00")
+    assert by_id[investissements.tag_id].spent == Decimal("-100.00")
+
+
 def test_deleting_tag_referenced_by_target_raises_422(db):
     account = _add_account(db)
     tag = _add_tag(db)

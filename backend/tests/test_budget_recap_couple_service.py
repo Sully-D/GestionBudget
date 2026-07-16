@@ -347,6 +347,71 @@ def test_virement_reflects_reimbursement_deducted_from_charges(db):
     assert rows_by_name["Personnel-Elle"].virement == Decimal("120.00")
 
 
+def test_retrait_investissements_excedentaire_reflete_dans_reste_a_vivre(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("500.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    month1, = _last_n_month_starts(1)
+
+    tx = _add_transaction(db, lui, month1, Decimal("3000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, lui, month1, Decimal("-800.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+    tx = _add_transaction(db, lui, month1, Decimal("-400.00"))
+    _tag_transaction(db, tx, tags["Investissements"])
+    # Retrait excédentaire : dépasse le versement du même mois.
+    tx = _add_transaction(db, lui, month1, Decimal("500.00"))
+    _tag_transaction(db, tx, tags["Investissements"])
+
+    tx = _add_transaction(db, elle, month1, Decimal("2000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, elle, month1, Decimal("-600.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    rows_by_name = {r.account_name: r for r in result.rows}
+    # Investissements Lui nettés sans plancher : 400 - 500 = -100.
+    assert rows_by_name["Personnel-Lui"].investissements == Decimal("-100.00")
+    assert result.total_investissements == Decimal("-100.00")
+    # Reste à vivre = revenus - charges - virements - investissements ;
+    # un investissements négatif AUGMENTE le reste à vivre.
+    assert rows_by_name["Personnel-Lui"].reste_a_vivre == Decimal("2300.00")
+    assert result.total_reste_a_vivre == Decimal("3700.00")
+
+
+def test_investissements_avg_arrondit_ROUND_HALF_UP_sur_moyenne_negative(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("500.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    months = _last_n_month_starts(8)
+
+    # Un seul retrait de 1€ (aucun versement) sur une fenêtre de 8 mois :
+    # net = -1.00, moyenne = -1.00 / 8 = -0.125, pile à la moitié du centime.
+    # ROUND_HALF_UP arrondit à l'écart de zéro (-0.13) ; ROUND_HALF_EVEN
+    # arrondirait vers le chiffre pair le plus proche (-0.12, "2" déjà pair) ;
+    # ROUND_DOWN/tronquer donnerait -0.12. Seul -0.13 prouve ROUND_HALF_UP.
+    tx = _add_transaction(db, lui, months[0], Decimal("1.00"))
+    _tag_transaction(db, tx, tags["Investissements"])
+
+    for month in months:
+        tx = _add_transaction(db, lui, month, Decimal("3000.00"))
+        _tag_transaction(db, tx, tags["Revenus"])
+        tx = _add_transaction(db, elle, month, Decimal("2000.00"))
+        _tag_transaction(db, tx, tags["Revenus"])
+
+    result = get_recap_couple(commun.account_id, 8, db)
+
+    rows_by_name = {r.account_name: r for r in result.rows}
+    assert rows_by_name["Personnel-Lui"].investissements == Decimal("-0.13")
+
+
 def test_virement_recalculates_with_selected_months_window(db):
     lui = _add_account(db, name="Personnel-Lui")
     elle = _add_account(db, name="Personnel-Elle")

@@ -112,6 +112,29 @@ def test_reste_a_vivre_reflete_un_remboursement_deduit_des_charges(db):
     assert parts_by_name["Personnel-Lui"].reste_a_vivre == Decimal("1550.00")
 
 
+def test_retrait_investissements_excedentaire_devient_negatif_sans_plancher(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    investissements = _add_tag(db, name="Investissements")
+    _set_revenu(db, lui, Decimal("2000.00"))
+    _set_revenu(db, elle, Decimal("1000.00"))
+    tx_versement = _add_transaction(db, lui, date(2026, 3, 5), Decimal("-400.00"))
+    _tag_transaction(db, tx_versement, investissements)
+    # Retrait excédentaire : dépasse le versement du même mois.
+    tx_retrait = _add_transaction(db, lui, date(2026, 3, 6), Decimal("500.00"))
+    _tag_transaction(db, tx_retrait, investissements)
+
+    result = get_repartition_commune(Decimal("1000.00"), investissements.tag_id, PERIOD_START, db)
+
+    parts_by_name = {p.account_name: p for p in result.parts}
+    # Contrairement au netting Charges (plancher 0€), Investissements peut
+    # devenir négatif : 400 - 500 = -100.
+    assert parts_by_name["Personnel-Lui"].charges == Decimal("-100.00")
+    # Reste à vivre = revenus - charges (ici le champ générique "charges" =
+    # total Investissements) ; un total négatif AUGMENTE le reste à vivre.
+    assert parts_by_name["Personnel-Lui"].reste_a_vivre == Decimal("2100.00")
+
+
 def test_depenses_sur_sous_tag_remontent_au_tag_parent(db):
     lui = _add_account(db, name="Personnel-Lui")
     elle = _add_account(db, name="Personnel-Elle")
