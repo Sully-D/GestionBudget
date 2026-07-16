@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, MouseEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
 import { deleteTransaction, getTransactions } from '../api/transactions'
@@ -9,9 +9,19 @@ import { formatDate, formatMontant, shiftDate } from '../lib/format'
 
 function Transactions() {
   const navigate = useNavigate()
+  // La période affichée vit dans l'URL (`?date=...`), pas dans un état local :
+  // ainsi elle survit à un démontage/remontage de ce composant (ex. retour
+  // d'historique après édition d'une Transaction sur une route distincte).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawReferenceDate = searchParams.get('date')
+  // Contrairement à l'ancien état local (toujours une sortie de `shiftDate`
+  // ou `undefined`), cette valeur vient désormais d'une URL modifiable à la
+  // main : on ignore silencieusement toute valeur qui n'a pas la forme
+  // ISO `YYYY-MM-DD` plutôt que de la transmettre telle quelle au backend.
+  const referenceDate =
+    rawReferenceDate && /^\d{4}-\d{2}-\d{2}$/.test(rawReferenceDate) ? rawReferenceDate : undefined
   const [accounts, setAccounts] = useState<Account[]>([])
   const [accountId, setAccountId] = useState<number | null>(null)
-  const [referenceDate, setReferenceDate] = useState<string | undefined>(undefined)
   const [periodStart, setPeriodStart] = useState<string | null>(null)
   const [periodEnd, setPeriodEnd] = useState<string | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -85,13 +95,32 @@ function Transactions() {
 
   function goToPreviousPeriod() {
     if (periodStart) {
-      setReferenceDate(shiftDate(periodStart, -1))
+      // `replace: true` : la navigation entre périodes ne doit pas empiler
+      // d'entrées d'historique, sinon "retour navigateur" devrait être pressé
+      // une fois par période au lieu de quitter directement la page.
+      // Updater fonctionnel (pas un objet littéral) : préserve tout autre
+      // paramètre de recherche déjà présent au lieu de remplacer l'URL entière.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('date', shiftDate(periodStart, -1))
+          return next
+        },
+        { replace: true },
+      )
     }
   }
 
   function goToNextPeriod() {
     if (periodEnd) {
-      setReferenceDate(shiftDate(periodEnd, 1))
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('date', shiftDate(periodEnd, 1))
+          return next
+        },
+        { replace: true },
+      )
     }
   }
 
@@ -175,7 +204,14 @@ function Transactions() {
             value={accountId ?? ''}
             onChange={(e) => {
               setAccountId(Number(e.target.value))
-              setReferenceDate(undefined)
+              setSearchParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev)
+                  next.delete('date')
+                  return next
+                },
+                { replace: true },
+              )
             }}
             className="rounded border border-border bg-surface-panel px-3 py-2 text-body text-ink"
           >

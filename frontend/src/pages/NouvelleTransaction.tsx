@@ -243,9 +243,21 @@ export function TransactionForm({ transactionId }: TransactionFormProps) {
         }
       }
       // Si l'utilisateur a déjà quitté la page via Échap pendant que la
-      // requête était en vol, ne pas le re-déplacer vers /transactions.
+      // requête était en vol, ne pas le re-déplacer.
+      // En édition, `navigate(-1)` restitue l'URL exacte de la page
+      // Transactions d'où l'utilisateur venait (période affichée `?date=...`
+      // comprise) — l'édition n'est accessible que depuis un clic sur une
+      // ligne de cette page, donc l'entrée d'historique précédente est
+      // garantie. En création, le formulaire est aussi accessible depuis le
+      // lien global "+ Transaction" présent sur toutes les pages : l'entrée
+      // précédente n'est alors pas forcément Transactions, donc on garde un
+      // chemin codé en dur plutôt que de renvoyer l'utilisateur ailleurs.
       if (!navigatedAwayRef.current) {
-        navigate('/transactions')
+        if (isEditMode) {
+          navigate(-1)
+        } else {
+          navigate('/transactions')
+        }
       }
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Erreur inattendue')
@@ -265,6 +277,11 @@ export function TransactionForm({ transactionId }: TransactionFormProps) {
       await addTransactionTag(tagAssociationRetry.transactionId, tagAssociationRetry.tagId)
       setTagAssociationRetry(null)
       setSubmitError(null)
+      // Ce retry n'existe que sur le flux de création (le Tag d'une
+      // Transaction existante se gère via TransactionTagEditor, pas ce
+      // mécanisme) — même chemin codé en dur que le succès de création
+      // ci-dessus, pour la même raison (formulaire accessible depuis le lien
+      // global "+ Transaction", pas seulement depuis Transactions).
       if (!navigatedAwayRef.current) {
         navigate('/transactions')
       }
