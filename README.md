@@ -131,3 +131,13 @@ docker compose build
 ```
 
 Reproduit le build multi-stage du `Dockerfile` (frontend buildé puis servi statiquement par le backend FastAPI).
+
+### Servir le frontend buildé depuis le backend (sans Docker)
+
+En dev, `backend/dist` n'est pas régénéré automatiquement — seul `docker compose build` le fait via le `Dockerfile`. Pour tester l'app complète servie par FastAPI (uvicorn) sans Docker, après une modification du frontend :
+
+```bash
+./scripts/build-frontend.sh
+```
+
+Build le frontend (`npm run build`) et copie le résultat dans `backend/dist`.
