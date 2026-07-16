@@ -77,6 +77,20 @@ def test_simple_expense_on_personal_account_is_visible(db):
     assert row.level == tag.level
 
 
+def test_reimbursement_on_charges_tag_nets_against_spent(db):
+    account = _add_account(db)
+    charges = _add_tag(db, name="Charges")
+    today = date.today()
+    period_start = _current_period_start(today)
+    _add_expense(db, account, charges, Decimal("-30.00"), today)
+    _add_expense(db, account, charges, Decimal("20.00"), today)
+
+    result = get_tag_spending(account.account_id, period_start, db)
+
+    row = next(r for r in result if r.tag_id == charges.tag_id)
+    assert row.spent == Decimal("10.00")
+
+
 def test_parent_aggregates_direct_plus_children_three_levels(db):
     account = _add_account(db)
     grandparent = _add_tag(db, name="Vie quotidienne", level=1)

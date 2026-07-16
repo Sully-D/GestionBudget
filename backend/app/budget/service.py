@@ -294,10 +294,59 @@ def _amount_by_tag_for_period(
     return total, tag_by_id
 
 
+def _net_floor(gross: Decimal, reimbursed: Decimal) -> Decimal:
+    return max(gross - reimbursed, Decimal("0.00"))
+
+
+def _charges_scope_tag_ids(tag_by_id: dict[int, Tag]) -> set[int]:
+    # Résout dynamiquement "Charges" + tous ses descendants (jamais de nom
+    # hardcodé au-delà du tag racine) en descendant `parent_id` par paliers,
+    # bornée par MAX_LEVEL=3 comme `ancestors_or_self` ci-dessus. Réutilise le
+    # `tag_by_id` déjà chargé par `_amount_by_tag_for_period` (aucune requête
+    # supplémentaire). Ensemble vide si le tag est absent ou ambigu :
+    # `_spent_by_tag_for_period` retombe alors sur son comportement brut
+    # existant (aucune régression pour les comptes non configurés pour le
+    # Récap Budget Couple).
+    matches = [tag for tag in tag_by_id.values() if tag.name == "Charges"]
+    if len(matches) != 1:
+        return set()
+    scope = {matches[0].tag_id}
+    changed = True
+    while changed:
+        changed = False
+        for tag in tag_by_id.values():
+            if tag.parent_id in scope and tag.tag_id not in scope:
+                scope.add(tag.tag_id)
+                changed = True
+    return scope
+
+
 def _spent_by_tag_for_period(
     account_id: int, period_start: date, period_end: date, db: Session
 ) -> tuple[dict[int, Decimal], dict[int, Tag]]:
-    return _amount_by_tag_for_period(account_id, period_start, period_end, db, positive=False)
+    # Un remboursement (transaction à montant positif) taggé "Charges" ou un
+    # descendant vient en déduction du total, plancherisé à 0€ (jamais négatif).
+    # Tout autre tag (Virements, Investissements, Cibles hors arbre Charges)
+    # garde son comportement brut inchangé : seul le scope résolu par
+    # `_charges_scope_tag_ids` est netté.
+    gross, tag_by_id = _amount_by_tag_for_period(
+        account_id, period_start, period_end, db, positive=False
+    )
+    charges_scope = _charges_scope_tag_ids(tag_by_id)
+    if not charges_scope:
+        return gross, tag_by_id
+    reimbursed, _ = _amount_by_tag_for_period(
+        account_id, period_start, period_end, db, positive=True
+    )
+    net = {
+        tag_id: (
+            _net_floor(amount, reimbursed.get(tag_id, Decimal("0.00")))
+            if tag_id in charges_scope
+            else amount
+        )
+        for tag_id, amount in gross.items()
+    }
+    return net, tag_by_id
 
 
 def _hierarchical_tag_order(tag_ids: set[int], tag_by_id: dict[int, Tag]) -> list[int]:

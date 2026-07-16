@@ -312,6 +312,41 @@ def test_virement_happy_path_matches_design_notes_example(db):
     assert rows_by_name["Personnel-Elle"].virement == Decimal("160.00")
 
 
+def test_virement_reflects_reimbursement_deducted_from_charges(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("500.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    month1, = _last_n_month_starts(1)
+
+    tx = _add_transaction(db, lui, month1, Decimal("3000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, lui, month1, Decimal("-800.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+    # Remboursement (mutuelle, etc.) taggé "Charges" : déduit du total, jamais ignoré.
+    tx = _add_transaction(db, lui, month1, Decimal("100.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    tx = _add_transaction(db, elle, month1, Decimal("2000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, elle, month1, Decimal("-600.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    assert result.virement_error is None
+    rows_by_name = {r.account_name: r for r in result.rows}
+    # Charges Lui nettées : 800 - 100 = 700. total_charges = 700 + 600 = 1300.
+    # besoin_total = 1300 + 500 = 1800 ; part Lui = 3000/5000 * 1800 = 1080 -> virement 380
+    # part Elle = 2000/5000 * 1800 = 720 -> virement 120
+    assert rows_by_name["Personnel-Lui"].charges == Decimal("700.00")
+    assert result.total_charges == Decimal("1300.00")
+    assert rows_by_name["Personnel-Lui"].virement == Decimal("380.00")
+    assert rows_by_name["Personnel-Elle"].virement == Decimal("120.00")
+
+
 def test_virement_recalculates_with_selected_months_window(db):
     lui = _add_account(db, name="Personnel-Lui")
     elle = _add_account(db, name="Personnel-Elle")
