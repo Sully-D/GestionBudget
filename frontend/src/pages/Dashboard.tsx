@@ -698,6 +698,27 @@ function Dashboard() {
                           : '—'}
                       </span>
                     </div>
+                    {/* Virement Lui/Elle vers le Commun — calcul automatique dérivé, jamais de
+                        bouton (contrairement au Calculateur de répartition ci-dessous). Échec
+                        "soft" (`virement_error`) : message explicite, aucun impact sur le reste
+                        du Tableau 2 déjà affiché ci-dessus. */}
+                    {recapCouple.virement_error ? (
+                      <p className="text-body text-alert">{recapCouple.virement_error}</p>
+                    ) : (
+                      recapCouple.rows.map((row) => (
+                        <div
+                          key={row.account_id}
+                          className="flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <span className="text-body text-ink-muted">
+                            Virement {row.account_name}
+                          </span>
+                          <span className="font-mono text-body-strong text-ink">
+                            {row.virement !== null ? formatMontant(row.virement) : '—'}
+                          </span>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </>

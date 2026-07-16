@@ -147,6 +147,7 @@ class RecapCoupleAccountRow(BaseModel):
     investissements: Decimal
     charges_plus_virements: Decimal
     reste_a_vivre: Decimal
+    virement: Decimal | None = None
 
     @field_serializer(
         "revenus",
@@ -155,10 +156,11 @@ class RecapCoupleAccountRow(BaseModel):
         "investissements",
         "charges_plus_virements",
         "reste_a_vivre",
+        "virement",
         when_used="json",
     )
-    def _serialize_decimal(self, value: Decimal) -> float:
-        return float(value)
+    def _serialize_decimal(self, value: Decimal | None) -> float | None:
+        return float(value) if value is not None else None
 
 
 class RecapCoupleRead(BaseModel):
@@ -176,6 +178,7 @@ class RecapCoupleRead(BaseModel):
     couple_charges_percentage: Decimal | None
     budget_charges_convenu: Decimal | None
     reste_disponible: Decimal | None
+    virement_error: str | None = None
 
     @field_serializer(
         "total_revenus",

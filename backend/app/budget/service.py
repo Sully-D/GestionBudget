@@ -856,6 +856,41 @@ def get_recap_couple(account_id: int, months: int, db: Session) -> RecapCoupleRe
     total_charges_plus_virements = sum((r.charges_plus_virements for r in rows), Decimal("0.00"))
     total_reste_a_vivre = sum((r.reste_a_vivre for r in rows), Decimal("0.00"))
 
+    # Virement Lui/Elle par Compte Personnel vers le Commun (calcul dérivé, non bloquant :
+    # cf. spec-virement-lui-elle-budget-couple.md). Échecs "soft" -> `virement_error` renseigné,
+    # jamais de HTTPException : Tableaux 1/2 doivent continuer de s'afficher normalement.
+    virement_error: str | None = None
+    if account.reference_balance is None:
+        virement_error = (
+            "Virement non calculable : le solde de référence du Compte Commun n'est pas défini."
+        )
+    elif total_revenus == 0:
+        virement_error = (
+            "Virement non calculable : aucun revenu constaté sur la fenêtre sélectionnée."
+        )
+    else:
+        besoin_total = total_charges + account.reference_balance
+        computed_virements: list[Decimal] = []
+        for row in rows:
+            part_theorique = (row.revenus / total_revenus) * besoin_total
+            virement_montant = (part_theorique - row.charges).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            computed_virements.append(virement_montant)
+
+        negative_accounts = [
+            row.account_name for row, v in zip(rows, computed_virements) if v < 0
+        ]
+        if negative_accounts:
+            noms = ", ".join(negative_accounts)
+            virement_error = (
+                f"Virement non calculable : {noms} a/ont déjà payé plus que sa/leur part "
+                "théorique."
+            )
+        else:
+            for row, virement_montant in zip(rows, computed_virements):
+                row.virement = virement_montant
+
     percentage = account.couple_charges_percentage
     budget_charges_convenu = (
         (percentage / Decimal(100) * total_revenus).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -881,6 +916,7 @@ def get_recap_couple(account_id: int, months: int, db: Session) -> RecapCoupleRe
         couple_charges_percentage=percentage,
         budget_charges_convenu=budget_charges_convenu,
         reste_disponible=reste_disponible,
+        virement_error=virement_error,
     )
 
 

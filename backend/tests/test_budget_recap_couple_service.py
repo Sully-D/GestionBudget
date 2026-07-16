@@ -280,3 +280,126 @@ def test_percentage_over_100_rejected_by_schema_validation():
 def test_percentage_negative_rejected_by_schema_validation():
     with pytest.raises(pydantic.ValidationError):
         CoupleChargesPercentageUpdate(account_id=1, percentage=Decimal("-5"))
+
+
+def test_virement_happy_path_matches_design_notes_example(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("500.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    month1, = _last_n_month_starts(1)
+
+    tx = _add_transaction(db, lui, month1, Decimal("3000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, lui, month1, Decimal("-800.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    tx = _add_transaction(db, elle, month1, Decimal("2000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, elle, month1, Decimal("-600.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    assert result.virement_error is None
+    rows_by_name = {r.account_name: r for r in result.rows}
+    # Exemple numérique des Design Notes de la spec :
+    # besoin_total = 1400 + 500 = 1900 ; part Lui = 3000/5000 * 1900 = 1140 -> virement 340
+    # part Elle = 2000/5000 * 1900 = 760 -> virement 160
+    assert rows_by_name["Personnel-Lui"].virement == Decimal("340.00")
+    assert rows_by_name["Personnel-Elle"].virement == Decimal("160.00")
+
+
+def test_virement_recalculates_with_selected_months_window(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("1000.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    month1, month2 = _last_n_month_starts(2)
+
+    for month in (month1, month2):
+        tx = _add_transaction(db, lui, month, Decimal("3000.00"))
+        _tag_transaction(db, tx, tags["Revenus"])
+        tx = _add_transaction(db, lui, month, Decimal("-800.00"))
+        _tag_transaction(db, tx, tags["Charges"])
+        tx = _add_transaction(db, elle, month, Decimal("2000.00"))
+        _tag_transaction(db, tx, tags["Revenus"])
+        tx = _add_transaction(db, elle, month, Decimal("-600.00"))
+        _tag_transaction(db, tx, tags["Charges"])
+
+    result = get_recap_couple(commun.account_id, 2, db)
+
+    assert result.virement_error is None
+    rows_by_name = {r.account_name: r for r in result.rows}
+    # Moyennes identiques au cas N=1 (les 2 mois sont identiques) mais Solde de référence
+    # différent (1000 au lieu de 500) : besoin_total = 1400 + 1000 = 2400.
+    # Part Lui = 3000/5000 * 2400 = 1440 -> virement 640 ; Elle = 960 -> virement 360.
+    assert rows_by_name["Personnel-Lui"].virement == Decimal("640.00")
+    assert rows_by_name["Personnel-Elle"].virement == Decimal("360.00")
+
+
+def test_virement_error_when_reference_balance_not_set(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    tags = _add_4_tags(db)
+    month1, = _last_n_month_starts(1)
+
+    tx = _add_transaction(db, lui, month1, Decimal("3000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, elle, month1, Decimal("2000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    assert result.virement_error is not None
+    assert all(r.virement is None for r in result.rows)
+    # Tableaux 1/2 non affectés par l'échec soft du calcul de virement.
+    assert result.total_revenus == Decimal("5000.00")
+
+
+def test_virement_error_when_total_revenus_zero(db):
+    _add_account(db, name="Personnel-Lui")
+    _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("500.00")
+    db.commit()
+    _add_4_tags(db)
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    assert result.virement_error is not None
+    assert all(r.virement is None for r in result.rows)
+    assert result.total_revenus == Decimal("0.00")
+
+
+def test_virement_error_when_a_computed_virement_is_negative(db):
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, name="Personnel-Elle")
+    commun = _add_account(db, name="Commun", is_common=True)
+    commun.reference_balance = Decimal("0.00")
+    db.commit()
+    tags = _add_4_tags(db)
+    month1, = _last_n_month_starts(1)
+
+    # Lui a déjà payé bien plus que sa part théorique proportionnelle à son revenu.
+    tx = _add_transaction(db, lui, month1, Decimal("1000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, lui, month1, Decimal("-900.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    tx = _add_transaction(db, elle, month1, Decimal("1000.00"))
+    _tag_transaction(db, tx, tags["Revenus"])
+    tx = _add_transaction(db, elle, month1, Decimal("-100.00"))
+    _tag_transaction(db, tx, tags["Charges"])
+
+    result = get_recap_couple(commun.account_id, 1, db)
+
+    assert result.virement_error is not None
+    assert all(r.virement is None for r in result.rows)
+    # Aucune régression sur les Tableaux 1/2 malgré l'échec soft du calcul de virement.
+    assert result.total_charges == Decimal("1000.00")

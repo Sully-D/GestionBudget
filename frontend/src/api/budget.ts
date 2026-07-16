@@ -193,6 +193,7 @@ export interface RecapCoupleAccountRow {
   investissements: number
   charges_plus_virements: number
   reste_a_vivre: number
+  virement: number | null
 }
 
 export interface RecapCoupleRead {
@@ -210,6 +211,7 @@ export interface RecapCoupleRead {
   couple_charges_percentage: number | null
   budget_charges_convenu: number | null
   reste_disponible: number | null
+  virement_error: string | null
 }
 
 export async function getRecapCouple(accountId: number, months: number): Promise<RecapCoupleRead> {
