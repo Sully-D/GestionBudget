@@ -213,22 +213,15 @@ function Transactions() {
           <Link to="/transactions/import" className="text-body text-accent underline">
             Importer un relevé
           </Link>
+          <Link to="/transactions/nouvelle" className="text-body text-accent underline">
+            Saisir manuellement
+          </Link>
         </div>
 
         {error && <p className="mt-4 text-body text-alert">{error}</p>}
 
         {!loading && !error && transactions.length === 0 && (
-          <p className="mt-6 text-body text-ink-muted">
-            Aucune Transaction sur cette Période.{' '}
-            <Link to="/transactions/import" className="text-accent underline">
-              Importer un relevé
-            </Link>{' '}
-            ou{' '}
-            <Link to="/transactions/nouvelle" className="text-accent underline">
-              saisir manuellement
-            </Link>
-            .
-          </p>
+          <p className="mt-6 text-body text-ink-muted">Aucune Transaction sur cette Période.</p>
         )}
 
         {transactions.length > 0 && (
