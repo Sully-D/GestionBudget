@@ -65,6 +65,20 @@ export function existingTagId(tagId: number | null, byId: Map<number, unknown>):
   return tagId !== null && byId.has(tagId) ? tagId : null
 }
 
+// Simulation (page sandbox) : mêmes termes que la formule officielle du
+// Disponible (AD-9) mais appliquée à des valeurs fictives saisies par
+// l'utilisateur, jamais aux entités réelles (aucun appel API/backend).
+export function calculerDisponibleSimule(
+  revenus: number,
+  charges: number,
+  depensesPlanifiees: number,
+  depensesCourantes: number,
+): number {
+  const disponible = revenus - charges - depensesPlanifiees - depensesCourantes
+  // Normalise -0 en 0 : sinon un résultat nul s'affiche "-0,00 €" dans l'encart positif.
+  return disponible === 0 ? 0 : disponible
+}
+
 export function formatDate(value: string): string {
   const [year, month, day] = value.split('-')
   return `${day}/${month}/${year}`

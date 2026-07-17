@@ -10,6 +10,7 @@ import ModifierTransaction from './pages/ModifierTransaction'
 import NouvelleTransaction from './pages/NouvelleTransaction'
 import Projection from './pages/Projection'
 import Recurrentes from './pages/Recurrentes'
+import Simulation from './pages/Simulation'
 import Synthese from './pages/Synthese'
 import Transactions from './pages/Transactions'
 
@@ -47,6 +48,9 @@ function App() {
           <Link to="/synthese" className="text-body text-ink-muted hover:text-ink">
             Synthèse
           </Link>
+          <Link to="/simulation" className="text-body text-ink-muted hover:text-ink">
+            Simulation
+          </Link>
           <Link to="/export" className="text-body text-ink-muted hover:text-ink">
             Export
           </Link>
@@ -79,6 +83,7 @@ function App() {
         <Route path="/projection" element={<Projection />} />
         <Route path="/comparaison" element={<Comparaison />} />
         <Route path="/synthese" element={<Synthese />} />
+        <Route path="/simulation" element={<Simulation />} />
         <Route path="/export" element={<Export />} />
       </Routes>
     </div>

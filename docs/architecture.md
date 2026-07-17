@@ -136,6 +136,7 @@ SQLite désactive l'application des FK par défaut. `app/core/db.py` force `PRAG
 - **Collision de routes** : `GET /transactions` et `GET /projection` partagent un préfixe avec des routes SPA de même forme. Ces deux routers implémentent une négociation de contenu manuelle (`Accept: text/html`) : sans `account_id`, ils servent `dist/index.html` au lieu de renvoyer un 422, pour supporter le refresh navigateur sur ces pages.
 - **Enveloppe de réponse** : toutes les réponses JSON sont `{"data": ...}` (succès) ou `{"detail": "message"}` (erreur), y compris les 422 de validation (normalisés en une chaîne unique par un handler custom, au lieu du format liste-d'objets FastAPI par défaut). Le frontend déballe via `unwrap<T>()` (`frontend/src/api/http.ts`), commun à tous les wrappers API.
 - **Aucune mutation client-side d'agrégats** — le frontend ne reçoit que des résultats déjà calculés (Disponible, soldes, répartitions, projections) ; toute modification déclenche un re-fetch.
+  - **Exception sanctionnée** : les pages *sandbox* de simulation (ex. `frontend/src/pages/Simulation.tsx`) recalculent une formule d'agrégat côté client sur des valeurs fictives saisies par l'utilisateur — jamais sur les entités réelles, aucun appel API/backend, rien n'est persisté. Cette exception ne couvre que ce cas d'usage ; l'affichage de données réelles reste soumis à l'invariant ci-dessus.
 
 ---
 
