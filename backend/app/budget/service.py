@@ -639,6 +639,19 @@ def get_disponible(account_id: int, period_start: date, db: Session) -> Disponib
     )
 
 
+def get_disponible_evolution(account_id: int, db: Session) -> list[DisponibleRead]:
+    account = _get_personal_account_or_404(account_id, db)
+    period_start, _ = period_for(account.start_day, date.today())
+
+    results: list[DisponibleRead] = []
+    cursor = period_start
+    for _ in range(6):
+        results.append(get_disponible(account_id, cursor, db))
+        cursor, _ = period_for(account.start_day, cursor - timedelta(days=1))
+
+    return list(reversed(results))
+
+
 def get_repartition_commune(
     montant_total: Decimal, tag_id: int, period_start: date, db: Session
 ) -> RepartitionCommuneRead:

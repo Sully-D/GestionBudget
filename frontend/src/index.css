@@ -30,6 +30,17 @@
   --color-alert-border: #f3c9c9;
   --color-alert-text-strong: #b42318;
 
+  /* Palette catégorielle des graphiques (page Synthèse) — ordre fixe, jamais cyclé,
+     validée CVD/contraste (scripts/validate_palette.js de la skill dataviz) sur les
+     surfaces claire/sombre de l'app. Slot 1 = --color-accent pour rester cohérent
+     avec le reste de l'UI. */
+  --chart-cat-1: #2563eb;
+  --chart-cat-2: #008300;
+  --chart-cat-3: #e87ba4;
+  --chart-cat-4: #eda100;
+  --chart-cat-5: #1baf7a;
+  --chart-cat-6: #eb6834;
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius: 8px;
@@ -92,6 +103,13 @@
   --color-alert-bg: #3a1414;
   --color-alert-border: #6b2a2a;
   --color-alert-text-strong: #fca5a5;
+
+  --chart-cat-1: #4f8cff;
+  --chart-cat-2: #008300;
+  --chart-cat-3: #d55181;
+  --chart-cat-4: #c98500;
+  --chart-cat-5: #199e70;
+  --chart-cat-6: #d95926;
 
   color-scheme: dark;
 }

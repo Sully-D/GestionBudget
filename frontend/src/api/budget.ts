@@ -120,6 +120,12 @@ export async function getDisponible(accountId: number, periodStart: string): Pro
   return unwrap<Disponible>(response)
 }
 
+export async function getDisponibleEvolution(accountId: number): Promise<Disponible[]> {
+  const params = new URLSearchParams({ account_id: String(accountId) })
+  const response = await fetch(`/disponible-evolution?${params.toString()}`)
+  return unwrap<Disponible[]>(response)
+}
+
 export interface TagTracking {
   tag_id: number
   tag_name: string
