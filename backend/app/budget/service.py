@@ -294,66 +294,26 @@ def _amount_by_tag_for_period(
     return total, tag_by_id
 
 
-def _net_floor(gross: Decimal, reimbursed: Decimal) -> Decimal:
-    return max(gross - reimbursed, Decimal("0.00"))
-
-
-def _scope_tag_ids(root_name: str, tag_by_id: dict[int, Tag]) -> set[int]:
-    # Résout dynamiquement `root_name` + tous ses descendants (jamais de nom
-    # hardcodé au-delà du tag racine) en descendant `parent_id` par paliers,
-    # bornée par MAX_LEVEL=3 comme `ancestors_or_self` ci-dessus. Réutilise le
-    # `tag_by_id` déjà chargé par `_amount_by_tag_for_period` (aucune requête
-    # supplémentaire). Ensemble vide si le tag est absent ou ambigu :
-    # `_spent_by_tag_for_period` retombe alors sur son comportement brut
-    # existant (aucune régression pour les comptes non configurés pour le
-    # Récap Budget Couple).
-    matches = [tag for tag in tag_by_id.values() if tag.name == root_name]
-    if len(matches) != 1:
-        return set()
-    scope = {matches[0].tag_id}
-    changed = True
-    while changed:
-        changed = False
-        for tag in tag_by_id.values():
-            if tag.parent_id in scope and tag.tag_id not in scope:
-                scope.add(tag.tag_id)
-                changed = True
-    return scope
-
-
 def _spent_by_tag_for_period(
     account_id: int, period_start: date, period_end: date, db: Session
 ) -> tuple[dict[int, Decimal], dict[int, Tag]]:
-    # Un remboursement (transaction à montant positif) taggé "Charges" ou un
-    # descendant vient en déduction du total, plancherisé à 0€ (jamais négatif).
-    # Un retrait (transaction à montant positif) taggé "Investissements" ou un
-    # descendant vient lui aussi en déduction, mais SANS plancher : le net peut
-    # devenir négatif si le retrait dépasse les versements (cf. spec
-    # déduction-retraits-investissements). Tout autre tag (Virements, Cibles
-    # hors ces deux arbres) garde son comportement brut inchangé. Les tags
-    # métier "Charges"/"Investissements" sont conventionnellement des racines
-    # de niveau 1 jamais imbriquées l'une sous l'autre (cf. Design Notes) ; si
-    # elles l'étaient malgré tout, la branche Charges (vérifiée en premier)
-    # l'emporterait silencieusement sur la branche Investissements.
+    # Toute transaction à montant positif taguée X (remboursement, retrait...)
+    # vient en déduction du total du tag X et de ses ancêtres (rollup déjà
+    # appliqué par `_amount_by_tag_for_period`), quel que soit X -- aucune
+    # restriction à un arbre de tags particulier ("Charges"/"Investissements"
+    # n'ont plus de traitement spécifique). Aucun plancher : le net peut
+    # devenir négatif si les montants positifs dépassent les dépenses, pour
+    # n'importe quel tag.
     gross, tag_by_id = _amount_by_tag_for_period(
         account_id, period_start, period_end, db, positive=False
     )
-    charges_scope = _scope_tag_ids("Charges", tag_by_id)
-    investissements_scope = _scope_tag_ids("Investissements", tag_by_id)
-    if not charges_scope and not investissements_scope:
-        return gross, tag_by_id
     reimbursed, _ = _amount_by_tag_for_period(
         account_id, period_start, period_end, db, positive=True
     )
-    net: dict[int, Decimal] = {}
-    for tag_id, amount in gross.items():
-        reimbursed_amount = reimbursed.get(tag_id, Decimal("0.00"))
-        if tag_id in charges_scope:
-            net[tag_id] = _net_floor(amount, reimbursed_amount)
-        elif tag_id in investissements_scope:
-            net[tag_id] = amount - reimbursed_amount
-        else:
-            net[tag_id] = amount
+    net = {
+        tag_id: amount - reimbursed.get(tag_id, Decimal("0.00"))
+        for tag_id, amount in gross.items()
+    }
     return net, tag_by_id
 
 
