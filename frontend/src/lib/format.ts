@@ -79,6 +79,101 @@ export function calculerDisponibleSimule(
   return disponible === 0 ? 0 : disponible
 }
 
+export interface BudgetCoupleSimule {
+  revenusCouple: number
+  budgetChargesConvenu: number
+  resteDisponible: number
+  virementLui: number | null
+  virementElle: number | null
+  virementError: string | null
+}
+
+// Arrondit au centime (même règle que le `Decimal.quantize(..., ROUND_HALF_UP)`
+// de get_recap_couple) avant toute comparaison à zéro : sans cet arrondi, un
+// résultat mathématiquement nul (ex. virement=0€ à partir d'entrées à 2
+// décimales) peut atterrir sur un résidu flottant du type -0.0004 et déclencher
+// à tort virementError. Normalise aussi -0 (s'afficherait "-0,00 €"/"-0,00 %").
+function arrondiCentimes(value: number): number {
+  const rounded = Math.round(value * 100) / 100
+  return rounded === 0 ? 0 : rounded
+}
+
+// Simulation (page sandbox) : réplique fidèle des formules de
+// `get_recap_couple` (backend/app/budget/service.py ~882-932), appliquées à un
+// Lui/Elle fictifs saisis localement plutôt qu'à des Comptes réels — aucun
+// appel API possible depuis cette page (cf. spec-budget-couple-page-simulation.md).
+// Noms de variables alignés sur le service Python pour faciliter une
+// resynchronisation manuelle si la formule serveur change. Les échecs de
+// virement (revenus nuls/négatifs, ou virement négatif) sont "soft" :
+// `virementError` est renseigné et virementLui/virementElle valent `null`,
+// mais budgetChargesConvenu/resteDisponible restent calculés et affichés.
+export function calculerBudgetCoupleSimule(
+  revenusLui: number,
+  revenusElle: number,
+  chargesLui: number,
+  chargesElle: number,
+  soldeReference: number,
+  pourcentage: number,
+): BudgetCoupleSimule {
+  const revenusCouple = arrondiCentimes(revenusLui + revenusElle)
+  const chargesCouple = arrondiCentimes(chargesLui + chargesElle)
+  const budgetChargesConvenu = arrondiCentimes((pourcentage / 100) * revenusCouple)
+  const resteDisponible = arrondiCentimes(revenusCouple - budgetChargesConvenu)
+
+  // Revenus négatifs (ex. un champ saisi en négatif) traités séparément des
+  // Revenus nuls (spec-budget-couple-page-simulation.md, Ask First : cas
+  // explicitement nommé, résolu par décision humaine avec un message dédié).
+  if (revenusCouple < 0) {
+    return {
+      revenusCouple,
+      budgetChargesConvenu,
+      resteDisponible,
+      virementLui: null,
+      virementElle: null,
+      virementError: 'Virement non calculable : Revenus du Couple négatifs.',
+    }
+  }
+
+  if (revenusCouple === 0) {
+    return {
+      revenusCouple,
+      budgetChargesConvenu,
+      resteDisponible,
+      virementLui: null,
+      virementElle: null,
+      virementError: 'Virement non calculable : aucun revenu constaté.',
+    }
+  }
+
+  const besoinTotal = arrondiCentimes(chargesCouple + soldeReference)
+  const virementLuiBrut = arrondiCentimes((revenusLui / revenusCouple) * besoinTotal - chargesLui)
+  const virementElleBrut = arrondiCentimes((revenusElle / revenusCouple) * besoinTotal - chargesElle)
+
+  const negatifs: string[] = []
+  if (virementLuiBrut < 0) negatifs.push('Lui')
+  if (virementElleBrut < 0) negatifs.push('Elle')
+
+  if (negatifs.length > 0) {
+    return {
+      revenusCouple,
+      budgetChargesConvenu,
+      resteDisponible,
+      virementLui: null,
+      virementElle: null,
+      virementError: `Virement non calculable : ${negatifs.join(', ')} a/ont déjà payé plus que sa/leur part théorique.`,
+    }
+  }
+
+  return {
+    revenusCouple,
+    budgetChargesConvenu,
+    resteDisponible,
+    virementLui: virementLuiBrut,
+    virementElle: virementElleBrut,
+    virementError: null,
+  }
+}
+
 export function formatDate(value: string): string {
   const [year, month, day] = value.split('-')
   return `${day}/${month}/${year}`
