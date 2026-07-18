@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Tag } from '../api/tags'
 import type { TagSummary } from '../api/transactions'
 import { addTransactionTag, getTransaction, removeTransactionTag } from '../api/transactions'
-import { tagBreadcrumb } from '../lib/format'
+import { sortTagsByCategoryAndName, tagBreadcrumb } from '../lib/format'
 
 interface TransactionTagEditorProps {
   transactionId: number
@@ -27,9 +27,14 @@ function TransactionTagEditor({
   const [error, setError] = useState<string | null>(null)
   const [removingIds, setRemovingIds] = useState<Set<number>>(new Set())
 
-  const associatedIds = new Set(tags.map((t) => t.tag_id))
-  const availableTags = allTags.filter((t) => !associatedIds.has(t.tag_id))
   const tagById = useMemo(() => new Map(allTags.map((t) => [t.tag_id, t])), [allTags])
+  const availableTags = useMemo(() => {
+    const associatedIds = new Set(tags.map((t) => t.tag_id))
+    return sortTagsByCategoryAndName(
+      allTags.filter((t) => !associatedIds.has(t.tag_id)),
+      tagById,
+    )
+  }, [allTags, tags, tagById])
 
   async function refetchTags() {
     const transaction = await getTransaction(transactionId)

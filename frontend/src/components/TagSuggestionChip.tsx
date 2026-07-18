@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { RuleConditionType } from '../api/rules'
 import type { Tag } from '../api/tags'
-import { conditionLabels, tagBreadcrumb } from '../lib/format'
+import { conditionLabels, sortTagsByCategoryAndName, tagBreadcrumb } from '../lib/format'
 
 interface TagSuggestionChipProps {
   selectedTagId: number | null
@@ -25,6 +25,7 @@ function TagSuggestionChip({
 }: TagSuggestionChipProps) {
   const [isEditingLocal, setIsEditingLocal] = useState(false)
   const tagById = useMemo(() => new Map(allTags.map((t) => [t.tag_id, t])), [allTags])
+  const sortedTags = useMemo(() => sortTagsByCategoryAndName(allTags, tagById), [allTags, tagById])
 
   const selectedTag = selectedTagId !== null ? allTags.find((t) => t.tag_id === selectedTagId) : undefined
   const showSelect = isEditingLocal || selectedTagId === null || !selectedTag
@@ -45,7 +46,7 @@ function TagSuggestionChip({
         className={formFieldClass}
       >
         <option value="">Aucun Tag</option>
-        {allTags.map((tag) => (
+        {sortedTags.map((tag) => (
           <option key={tag.tag_id} value={tag.tag_id}>
             {tagBreadcrumb(tag, tagById)}
           </option>

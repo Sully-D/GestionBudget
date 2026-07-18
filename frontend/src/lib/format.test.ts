@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { calculerBudgetCoupleSimule, calculerDisponibleSimule, formatMontant } from './format'
+import { calculerBudgetCoupleSimule, calculerDisponibleSimule, formatMontant, sortTagsByCategoryAndName } from './format'
+
+interface TestTag {
+  tag_id: number
+  name: string
+  parent_id: number | null
+}
 
 // NOTE: aucun test runner n'est configuré dans ce projet frontend (pas de
 // script "test" dans package.json, ni vitest/@testing-library/react en
@@ -156,5 +162,72 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.virementElle).toBe(0)
     expect(result.resteAVivreLui).toBe(0)
     expect(result.resteAVivreElle).toBe(900)
+  })
+})
+
+describe('sortTagsByCategoryAndName', () => {
+  // Alimentation (racine) > Courses / Restaurant ; Loisirs (racine) > Cinéma
+  const tags: TestTag[] = [
+    { tag_id: 1, name: 'Alimentation', parent_id: null },
+    { tag_id: 2, name: 'Loisirs', parent_id: null },
+    { tag_id: 3, name: 'Restaurant', parent_id: 1 },
+    { tag_id: 4, name: 'Courses', parent_id: 1 },
+    { tag_id: 5, name: 'Cinéma', parent_id: 2 },
+  ]
+  const byId = new Map(tags.map((t) => [t.tag_id, t]))
+
+  it('trie par nom de catégorie racine puis par nom de tag, ordre alphabétique fr', () => {
+    const sorted = sortTagsByCategoryAndName(tags, byId)
+    expect(sorted.map((t) => t.name)).toEqual(['Alimentation', 'Courses', 'Restaurant', 'Cinéma', 'Loisirs'])
+  })
+
+  it("ne modifie ni l'ordre ni le contenu du tableau d'entrée (retourne une copie triée)", () => {
+    const input = tags.map((t) => ({ ...t }))
+    const snapshot = input.map((t) => ({ ...t }))
+    sortTagsByCategoryAndName(input, byId)
+    expect(input).toEqual(snapshot)
+  })
+
+  it('renvoie un tableau vide pour une entrée vide', () => {
+    expect(sortTagsByCategoryAndName([], byId)).toEqual([])
+  })
+
+  it('remonte jusqu\'à la racine sur une hiérarchie à 3 niveaux (level 1/2/3)', () => {
+    const deep: TestTag[] = [
+      { tag_id: 10, name: 'Transport', parent_id: null },
+      { tag_id: 11, name: 'Voiture', parent_id: 10 },
+      { tag_id: 12, name: 'Essence', parent_id: 11 },
+      { tag_id: 13, name: 'Assurance', parent_id: null },
+    ]
+    const deepById = new Map(deep.map((t) => [t.tag_id, t]))
+    const sorted = sortTagsByCategoryAndName(deep, deepById)
+    // "Essence" (catégorie racine "Transport") doit passer après "Assurance"
+    // (catégorie racine "Assurance") malgré son propre nom alphabétiquement
+    // antérieur, car le tri se fait par catégorie racine d'abord.
+    expect(sorted.map((t) => t.name)).toEqual(['Assurance', 'Essence', 'Voiture', 'Transport'])
+  })
+
+  it('traite un Tag avec un parent_id orphelin (absent de byId) comme sa propre racine', () => {
+    const orphan: TestTag[] = [{ tag_id: 20, name: 'Fantome', parent_id: 999 }]
+    const orphanById = new Map(orphan.map((t) => [t.tag_id, t]))
+    expect(sortTagsByCategoryAndName(orphan, orphanById).map((t) => t.name)).toEqual(['Fantome'])
+  })
+
+  it('ne boucle pas indéfiniment sur une chaîne de parent_id cyclique', () => {
+    const cyclic: TestTag[] = [
+      { tag_id: 30, name: 'A', parent_id: 31 },
+      { tag_id: 31, name: 'B', parent_id: 30 },
+    ]
+    const cyclicById = new Map(cyclic.map((t) => [t.tag_id, t]))
+    expect(() => sortTagsByCategoryAndName(cyclic, cyclicById)).not.toThrow()
+  })
+
+  it('départage par tag_id quand catégorie ET nom de Tag sont identiques (aucune contrainte unique en base)', () => {
+    const duplicateNames: TestTag[] = [
+      { tag_id: 41, name: 'Divers', parent_id: null },
+      { tag_id: 40, name: 'Divers', parent_id: null },
+    ]
+    const duplicateById = new Map(duplicateNames.map((t) => [t.tag_id, t]))
+    expect(sortTagsByCategoryAndName(duplicateNames, duplicateById).map((t) => t.tag_id)).toEqual([40, 41])
   })
 })

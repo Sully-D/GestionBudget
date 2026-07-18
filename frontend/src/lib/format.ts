@@ -34,27 +34,54 @@ interface BreadcrumbNode {
 }
 
 // Générique sur toute forme exposant {tag_id, name, parent_id} : partagé par
-// `tagBreadcrumb` (Tag complet, api/tags.ts) et par les pages qui reconstruisent
-// une forme locale allégée depuis une autre réponse API (ex. Dashboard.tsx/TagTracking).
-// `byId` doit être mémoïsé par l'appelant (ex. `useMemo`) plutôt que reconstruit
-// à chaque appel — cette fonction est typiquement invoquée une fois par option
-// d'un <select> de Tags, soit N fois par rendu.
-export function breadcrumbPath<T extends BreadcrumbNode>(node: T, byId: Map<number, T>): string {
-  const parts: string[] = [node.name]
+// `tagBreadcrumb`/`sortTagsByCategoryAndName` (Tag complet, api/tags.ts) et par
+// les pages qui reconstruisent une forme locale allégée depuis une autre
+// réponse API (ex. Dashboard.tsx/TagTracking). `byId` doit être mémoïsé par
+// l'appelant (ex. `useMemo`) plutôt que reconstruit à chaque appel — ce
+// chemin est typiquement emprunté une fois par option d'un <select> de Tags,
+// soit N fois par rendu.
+function ancestorChain<T extends BreadcrumbNode>(node: T, byId: Map<number, T>): T[] {
+  const chain: T[] = [node]
   const visited = new Set<number>([node.tag_id])
   let current = node
   while (current.parent_id !== null) {
     const parent = byId.get(current.parent_id)
     if (!parent || visited.has(parent.tag_id)) break
-    parts.unshift(parent.name)
+    chain.unshift(parent)
     visited.add(parent.tag_id)
     current = parent
   }
-  return parts.join(' › ')
+  return chain
+}
+
+export function breadcrumbPath<T extends BreadcrumbNode>(node: T, byId: Map<number, T>): string {
+  return ancestorChain(node, byId)
+    .map((t) => t.name)
+    .join(' › ')
 }
 
 export function tagBreadcrumb(tag: Tag, byId: Map<number, Tag>): string {
   return breadcrumbPath(tag, byId)
+}
+
+// Tri utilisé par les listes de sélection de Tags (ajout de Tag à une
+// Transaction, suggestion d'auto-tagging) : catégorie racine (niveau 1) puis
+// nom du Tag, tous deux en ordre alphabétique fr ; `tag_id` en dernier
+// recours pour un tri déterministe si deux catégories ou deux Tags portent
+// le même nom (aucune contrainte d'unicité sur `name` côté backend). `byId`
+// doit être mémoïsé par l'appelant, comme pour `breadcrumbPath`. Le nom de
+// catégorie de chaque Tag est résolu une seule fois (decorate-sort-undecorate)
+// plutôt que dans le comparateur, pour éviter de remonter l'arbre à chaque
+// paire comparée.
+export function sortTagsByCategoryAndName<T extends BreadcrumbNode>(tags: T[], byId: Map<number, T>): T[] {
+  const decorated = tags.map((tag) => ({ tag, categoryName: ancestorChain(tag, byId)[0].name }))
+  decorated.sort((a, b) => {
+    const categoryCompare = a.categoryName.localeCompare(b.categoryName, 'fr')
+    if (categoryCompare !== 0) return categoryCompare
+    const nameCompare = a.tag.name.localeCompare(b.tag.name, 'fr')
+    return nameCompare !== 0 ? nameCompare : a.tag.tag_id - b.tag.tag_id
+  })
+  return decorated.map((d) => d.tag)
 }
 
 // Renvoie `tagId` s'il désigne encore un Tag présent dans `byId`, sinon `null`.
