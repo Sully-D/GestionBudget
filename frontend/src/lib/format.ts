@@ -100,15 +100,19 @@ function arrondiCentimes(value: number): number {
   return rounded === 0 ? 0 : rounded
 }
 
-// Simulation (page sandbox) : réplique fidèle des formules de
+// Simulation (page sandbox) : réplique fidèle des *formules* de
 // `get_recap_couple` (backend/app/budget/service.py ~882-932), appliquées à un
 // Lui/Elle fictifs saisis localement plutôt qu'à des Comptes réels — aucun
 // appel API possible depuis cette page (cf. spec-budget-couple-page-simulation.md).
-// Noms de variables alignés sur le service Python pour faciliter une
-// resynchronisation manuelle si la formule serveur change. Les échecs de
-// virement (revenus nuls/négatifs, ou virement négatif) sont "soft" :
-// `virementError` est renseigné et virementLui/virementElle valent `null`,
-// mais budgetChargesConvenu/resteDisponible restent calculés et affichés.
+// Le *texte* des messages d'erreur diverge volontairement de celui du backend/
+// Dashboard depuis spec-simulation-messages-virement-detailles.md (messages
+// chiffrés avec proposition de résolution, propres à cette page sandbox) :
+// seules les formules numériques doivent rester synchronisées manuellement.
+// Noms de variables alignés sur le service Python pour faciliter cette
+// resynchronisation si la formule serveur change. Les échecs de virement
+// (revenus nuls/négatifs, besoin total négatif, ou virement négatif) sont
+// "soft" : `virementError` est renseigné et virementLui/virementElle valent
+// `null`, mais budgetChargesConvenu/resteDisponible restent calculés et affichés.
 export function calculerBudgetCoupleSimule(
   revenusLui: number,
   revenusElle: number,
@@ -132,7 +136,11 @@ export function calculerBudgetCoupleSimule(
       resteDisponible,
       virementLui: null,
       virementElle: null,
-      virementError: 'Virement non calculable : Revenus du Couple négatifs.',
+      virementError:
+        `Virement non calculable : Revenus du Couple négatifs (${formatMontant(revenusCouple)}). ` +
+        `Vérifiez les Revenus Lui (${formatMontant(arrondiCentimes(revenusLui))}) et Elle ` +
+        `(${formatMontant(arrondiCentimes(revenusElle))}) saisis : au moins un des deux doit être ` +
+        'corrigé pour obtenir un total positif ou nul.',
       resteAVivreLui: null,
       resteAVivreElle: null,
     }
@@ -145,28 +153,85 @@ export function calculerBudgetCoupleSimule(
       resteDisponible,
       virementLui: null,
       virementElle: null,
-      virementError: 'Virement non calculable : aucun revenu constaté.',
+      virementError:
+        `Virement non calculable : Revenus du Couple nuls (Lui ${formatMontant(arrondiCentimes(revenusLui))}, ` +
+        `Elle ${formatMontant(arrondiCentimes(revenusElle))}). Renseignez au moins un revenu pour permettre ` +
+        'le calcul.',
       resteAVivreLui: null,
       resteAVivreElle: null,
     }
   }
 
   const besoinTotal = arrondiCentimes(chargesCouple + soldeReference)
-  const virementLuiBrut = arrondiCentimes((revenusLui / revenusCouple) * besoinTotal - chargesLui)
-  const virementElleBrut = arrondiCentimes((revenusElle / revenusCouple) * besoinTotal - chargesElle)
 
-  const negatifs: string[] = []
-  if (virementLuiBrut < 0) negatifs.push('Lui')
-  if (virementElleBrut < 0) negatifs.push('Elle')
-
-  if (negatifs.length > 0) {
+  // Besoin total négatif (Solde de référence très négatif, champ sans `min`) :
+  // gardé *avant* le calcul par personne pour ne jamais exposer une "part
+  // théorique" négative dans le message (spec-simulation-messages-virement-
+  // detailles.md, Spec Change Log 2026-07-18, décision humaine).
+  if (besoinTotal < 0) {
     return {
       revenusCouple,
       budgetChargesConvenu,
       resteDisponible,
       virementLui: null,
       virementElle: null,
-      virementError: `Virement non calculable : ${negatifs.join(', ')} a/ont déjà payé plus que sa/leur part théorique.`,
+      virementError:
+        'Virement non calculable : le besoin total à répartir (Charges du Couple + Solde de référence) ' +
+        `est négatif (${formatMontant(besoinTotal)}). Augmentez le Solde de référence d'au moins ` +
+        `${formatMontant(arrondiCentimes(-besoinTotal))} pour repasser à un besoin total nul ou positif, ` +
+        'ou vérifiez les Charges du Couple saisies.',
+      resteAVivreLui: null,
+      resteAVivreElle: null,
+    }
+  }
+
+  const virementLuiBrut = arrondiCentimes((revenusLui / revenusCouple) * besoinTotal - chargesLui)
+  const virementElleBrut = arrondiCentimes((revenusElle / revenusCouple) * besoinTotal - chargesElle)
+
+  // Détail chiffré (charges déjà payées / part théorique / montant en trop)
+  // par personne concernée, pour un message actionnable plutôt que générique
+  // (demande utilisateur : "quelque chose de plus parlant avec des chiffres
+  // et une proposition pour résoudre le problème"). `besoinTotal >= 0` est
+  // désormais garanti par la garde ci-dessus, donc part théorique >= 0 tant
+  // que les revenus individuels le sont aussi (un revenu Lui/Elle négatif
+  // isolé, Revenus Couple restant positif, est un gap pré-existant hors
+  // scope — cf. deferred-work.md).
+  const detailsNegatifs: string[] = []
+  if (virementLuiBrut < 0) {
+    // `chargesLuiAffichee` arrondie une seule fois puis réutilisée pour le
+    // montant affiché ET pour le calcul de la part théorique affichée :
+    // évite un écart d'un centime entre les deux si `chargesLui` porte une
+    // précision infra-centime (finding revue Blind Hunter). `virementLuiBrut`
+    // lui-même reste calculé à partir de `chargesLui` brut (formule frozen,
+    // ne pas toucher).
+    const chargesLuiAffichee = arrondiCentimes(chargesLui)
+    const partTheoriqueLui = arrondiCentimes(chargesLuiAffichee + virementLuiBrut)
+    const tropPayeLui = arrondiCentimes(-virementLuiBrut)
+    detailsNegatifs.push(
+      `Lui a déjà payé ${formatMontant(chargesLuiAffichee)} de Charges pour une part théorique de ` +
+        `${formatMontant(partTheoriqueLui)}, soit ${formatMontant(tropPayeLui)} de trop (réduisez ses Charges ` +
+        'déjà payées de ce montant, ou augmentez le Solde de référence du Compte Commun)',
+    )
+  }
+  if (virementElleBrut < 0) {
+    const chargesElleAffichee = arrondiCentimes(chargesElle)
+    const partTheoriqueElle = arrondiCentimes(chargesElleAffichee + virementElleBrut)
+    const tropPayeElle = arrondiCentimes(-virementElleBrut)
+    detailsNegatifs.push(
+      `Elle a déjà payé ${formatMontant(chargesElleAffichee)} de Charges pour une part théorique de ` +
+        `${formatMontant(partTheoriqueElle)}, soit ${formatMontant(tropPayeElle)} de trop (réduisez ses Charges ` +
+        'déjà payées de ce montant, ou augmentez le Solde de référence du Compte Commun)',
+    )
+  }
+
+  if (detailsNegatifs.length > 0) {
+    return {
+      revenusCouple,
+      budgetChargesConvenu,
+      resteDisponible,
+      virementLui: null,
+      virementElle: null,
+      virementError: `Virement non calculable : ${detailsNegatifs.join(' ; ')}.`,
       resteAVivreLui: null,
       resteAVivreElle: null,
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculerBudgetCoupleSimule, calculerDisponibleSimule } from './format'
+import { calculerBudgetCoupleSimule, calculerDisponibleSimule, formatMontant } from './format'
 
 // NOTE: aucun test runner n'est configuré dans ce projet frontend (pas de
 // script "test" dans package.json, ni vitest/@testing-library/react en
@@ -52,7 +52,10 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.resteDisponible).toBe(0)
     expect(result.virementLui).toBeNull()
     expect(result.virementElle).toBeNull()
-    expect(result.virementError).toBe('Virement non calculable : aucun revenu constaté.')
+    expect(result.virementError).toBe(
+      `Virement non calculable : Revenus du Couple nuls (Lui ${formatMontant(0)}, Elle ${formatMontant(0)}). ` +
+        'Renseignez au moins un revenu pour permettre le calcul.',
+    )
     expect(result.resteAVivreLui).toBeNull()
     expect(result.resteAVivreElle).toBeNull()
   })
@@ -62,17 +65,64 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.revenusCouple).toBe(-1500)
     expect(result.virementLui).toBeNull()
     expect(result.virementElle).toBeNull()
-    expect(result.virementError).toBe('Virement non calculable : Revenus du Couple négatifs.')
+    expect(result.virementError).toBe(
+      `Virement non calculable : Revenus du Couple négatifs (${formatMontant(-1500)}). ` +
+        `Vérifiez les Revenus Lui (${formatMontant(-2000)}) et Elle (${formatMontant(500)}) saisis : ` +
+        'au moins un des deux doit être corrigé pour obtenir un total positif ou nul.',
+    )
     expect(result.resteAVivreLui).toBeNull()
     expect(result.resteAVivreElle).toBeNull()
   })
 
-  it('signale un virement négatif en nommant "Lui" quand ses charges déjà payées dépassent largement sa part théorique', () => {
+  it('signale un virement négatif en détaillant "Lui" quand ses charges déjà payées dépassent sa part théorique', () => {
     const result = calculerBudgetCoupleSimule(1000, 1000, 900, 100, 0, 50)
     expect(result.virementLui).toBeNull()
     expect(result.virementElle).toBeNull()
     expect(result.virementError).toBe(
-      'Virement non calculable : Lui a/ont déjà payé plus que sa/leur part théorique.',
+      `Virement non calculable : Lui a déjà payé ${formatMontant(900)} de Charges pour une part théorique de ` +
+        `${formatMontant(500)}, soit ${formatMontant(400)} de trop (réduisez ses Charges déjà payées de ce ` +
+        'montant, ou augmentez le Solde de référence du Compte Commun).',
+    )
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
+  })
+
+  it('signale un virement négatif en détaillant "Elle" quand ses charges déjà payées dépassent sa part théorique', () => {
+    const result = calculerBudgetCoupleSimule(1000, 1000, 100, 900, 0, 50)
+    expect(result.virementLui).toBeNull()
+    expect(result.virementElle).toBeNull()
+    expect(result.virementError).toBe(
+      `Virement non calculable : Elle a déjà payé ${formatMontant(900)} de Charges pour une part théorique de ` +
+        `${formatMontant(500)}, soit ${formatMontant(400)} de trop (réduisez ses Charges déjà payées de ce ` +
+        'montant, ou augmentez le Solde de référence du Compte Commun).',
+    )
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
+  })
+
+  it('signale un besoin total négatif (Solde de référence très bas) sans jamais afficher de part théorique négative', () => {
+    const result = calculerBudgetCoupleSimule(1000, 1000, 0, 0, -5000, 0)
+    expect(result.virementLui).toBeNull()
+    expect(result.virementElle).toBeNull()
+    expect(result.virementError).toBe(
+      'Virement non calculable : le besoin total à répartir (Charges du Couple + Solde de référence) est ' +
+        `négatif (${formatMontant(-5000)}). Augmentez le Solde de référence d'au moins ${formatMontant(5000)} ` +
+        'pour repasser à un besoin total nul ou positif, ou vérifiez les Charges du Couple saisies.',
+    )
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
+  })
+
+  it('détaille Lui ET Elle sans ambiguïté quand les deux ont un virement négatif simultanément', () => {
+    const result = calculerBudgetCoupleSimule(100, 1900, 500, 1000, -1000, 0)
+    expect(result.virementLui).toBeNull()
+    expect(result.virementElle).toBeNull()
+    expect(result.virementError).toBe(
+      `Virement non calculable : Lui a déjà payé ${formatMontant(500)} de Charges pour une part théorique de ` +
+        `${formatMontant(25)}, soit ${formatMontant(475)} de trop (réduisez ses Charges déjà payées de ce ` +
+        `montant, ou augmentez le Solde de référence du Compte Commun) ; Elle a déjà payé ${formatMontant(1000)} ` +
+        `de Charges pour une part théorique de ${formatMontant(475)}, soit ${formatMontant(525)} de trop ` +
+        '(réduisez ses Charges déjà payées de ce montant, ou augmentez le Solde de référence du Compte Commun).',
     )
     expect(result.resteAVivreLui).toBeNull()
     expect(result.resteAVivreElle).toBeNull()
