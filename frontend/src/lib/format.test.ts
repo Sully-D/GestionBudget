@@ -40,6 +40,8 @@ describe('calculerBudgetCoupleSimule', () => {
       virementLui: 200,
       virementElle: 100,
       virementError: null,
+      resteAVivreLui: 1200,
+      resteAVivreElle: 800,
     })
   })
 
@@ -51,6 +53,8 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.virementLui).toBeNull()
     expect(result.virementElle).toBeNull()
     expect(result.virementError).toBe('Virement non calculable : aucun revenu constaté.')
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
   })
 
   it('signale un message dédié quand Revenus du Couple est négatif', () => {
@@ -59,6 +63,8 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.virementLui).toBeNull()
     expect(result.virementElle).toBeNull()
     expect(result.virementError).toBe('Virement non calculable : Revenus du Couple négatifs.')
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
   })
 
   it('signale un virement négatif en nommant "Lui" quand ses charges déjà payées dépassent largement sa part théorique', () => {
@@ -68,6 +74,8 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.virementError).toBe(
       'Virement non calculable : Lui a/ont déjà payé plus que sa/leur part théorique.',
     )
+    expect(result.resteAVivreLui).toBeNull()
+    expect(result.resteAVivreElle).toBeNull()
   })
 
   it('ne signale pas à tort un virement négatif quand la formule donne un résultat mathématiquement nul', () => {
@@ -79,6 +87,7 @@ describe('calculerBudgetCoupleSimule', () => {
     const result = calculerBudgetCoupleSimule(333, 667, 99.9, 0, 200.1, 0)
     expect(result.virementError).toBeNull()
     expect(result.virementLui).toBe(0)
+    expect(result.resteAVivreLui).toBe(233.1)
   })
 
   it('traite un % Charges convenues vide (converti en 0 par l\'appelant) comme 0 %, Reste disponible = Revenus Couple', () => {
@@ -95,5 +104,7 @@ describe('calculerBudgetCoupleSimule', () => {
     expect(result.virementError).toBeNull()
     expect(result.virementLui).toBe(0)
     expect(result.virementElle).toBe(0)
+    expect(result.resteAVivreLui).toBe(0)
+    expect(result.resteAVivreElle).toBe(900)
   })
 })

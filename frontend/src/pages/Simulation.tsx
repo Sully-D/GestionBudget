@@ -295,6 +295,18 @@ function Simulation() {
                   {formatMontant(budgetCouple.virementElle ?? 0)}
                 </span>
               </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-body text-ink-muted">Reste à vivre Lui</span>
+                <span className="font-mono text-body-strong text-ink">
+                  {formatMontant(budgetCouple.resteAVivreLui ?? 0)}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-body text-ink-muted">Reste à vivre Elle</span>
+                <span className="font-mono text-body-strong text-ink">
+                  {formatMontant(budgetCouple.resteAVivreElle ?? 0)}
+                </span>
+              </div>
             </>
           )}
         </div>

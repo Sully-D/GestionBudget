@@ -86,6 +86,8 @@ export interface BudgetCoupleSimule {
   virementLui: number | null
   virementElle: number | null
   virementError: string | null
+  resteAVivreLui: number | null
+  resteAVivreElle: number | null
 }
 
 // Arrondit au centime (même règle que le `Decimal.quantize(..., ROUND_HALF_UP)`
@@ -131,6 +133,8 @@ export function calculerBudgetCoupleSimule(
       virementLui: null,
       virementElle: null,
       virementError: 'Virement non calculable : Revenus du Couple négatifs.',
+      resteAVivreLui: null,
+      resteAVivreElle: null,
     }
   }
 
@@ -142,6 +146,8 @@ export function calculerBudgetCoupleSimule(
       virementLui: null,
       virementElle: null,
       virementError: 'Virement non calculable : aucun revenu constaté.',
+      resteAVivreLui: null,
+      resteAVivreElle: null,
     }
   }
 
@@ -161,6 +167,8 @@ export function calculerBudgetCoupleSimule(
       virementLui: null,
       virementElle: null,
       virementError: `Virement non calculable : ${negatifs.join(', ')} a/ont déjà payé plus que sa/leur part théorique.`,
+      resteAVivreLui: null,
+      resteAVivreElle: null,
     }
   }
 
@@ -171,6 +179,12 @@ export function calculerBudgetCoupleSimule(
     virementLui: virementLuiBrut,
     virementElle: virementElleBrut,
     virementError: null,
+    // Reste à vivre = Revenus − Charges déjà payées − Virement vers le Commun :
+    // même concept que reste_a_vivre du Tableau 1 (Dashboard), mais appliqué
+    // ici à Lui/Elle plutôt qu'à un Compte réel. Non calculable dès que le
+    // Virement ne l'est pas (mêmes cas d'erreur ci-dessus).
+    resteAVivreLui: arrondiCentimes(revenusLui - chargesLui - virementLuiBrut),
+    resteAVivreElle: arrondiCentimes(revenusElle - chargesElle - virementElleBrut),
   }
 }
 
