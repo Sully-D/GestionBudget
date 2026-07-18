@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, MouseEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { getAccounts } from '../api/accounts'
 import type { Account } from '../api/accounts'
-import { deleteTransaction, getTransactions } from '../api/transactions'
-import type { Transaction } from '../api/transactions'
-import { formatDate, formatMontant, shiftDate } from '../lib/format'
+import { deleteTransaction, getTransactions, searchTransactions } from '../api/transactions'
+import type { Transaction, TransactionSearchFilters } from '../api/transactions'
+import { getTags } from '../api/tags'
+import type { Tag } from '../api/tags'
+import { formatDate, formatMontant, shiftDate, sortTagsByCategoryAndName, tagBreadcrumb } from '../lib/format'
 
 function Transactions() {
   const navigate = useNavigate()
@@ -33,6 +35,34 @@ function Transactions() {
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
   const confirmButtonRef = useRef<HTMLButtonElement>(null)
 
+  // Panneau de recherche : tant qu'au moins un filtre est actif, la page
+  // bascule hors navigation par Période (recherche non bornée dans le temps
+  // sur le Compte sélectionné, cf. spec-recherche-transactions).
+  const [tags, setTags] = useState<Tag[]>([])
+  const [labelFilter, setLabelFilter] = useState('')
+  const [payeeFilter, setPayeeFilter] = useState('')
+  const [amountFilter, setAmountFilter] = useState('')
+  const [amountMinFilter, setAmountMinFilter] = useState('')
+  const [amountMaxFilter, setAmountMaxFilter] = useState('')
+  const [dateExactFilter, setDateExactFilter] = useState('')
+  const [dateFromFilter, setDateFromFilter] = useState('')
+  const [dateToFilter, setDateToFilter] = useState('')
+  const [tagIdsFilter, setTagIdsFilter] = useState<number[]>([])
+
+  const filtersActive =
+    labelFilter.trim() !== '' ||
+    payeeFilter.trim() !== '' ||
+    amountFilter.trim() !== '' ||
+    amountMinFilter.trim() !== '' ||
+    amountMaxFilter.trim() !== '' ||
+    dateExactFilter !== '' ||
+    dateFromFilter !== '' ||
+    dateToFilter !== '' ||
+    tagIdsFilter.length > 0
+
+  const tagsById = useMemo(() => new Map(tags.map((tag) => [tag.tag_id, tag])), [tags])
+  const sortedTags = useMemo(() => sortTagsByCategoryAndName(tags, tagsById), [tags, tagsById])
+
   useEffect(() => {
     getAccounts()
       .then((data) => {
@@ -42,13 +72,51 @@ function Transactions() {
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Erreur inattendue')
       })
+    // Échec silencieux : dégrade juste le panneau de filtres (case Tags
+    // absente), n'empêche pas le reste de la page de fonctionner.
+    getTags()
+      .then((data) => setTags(data))
+      .catch(() => {})
   }, [])
+
+  const buildSearchFilters = useCallback(
+    (): TransactionSearchFilters => ({
+      label: labelFilter.trim() || undefined,
+      payee: payeeFilter.trim() || undefined,
+      amount: amountFilter.trim() ? Number(amountFilter.replace(',', '.')) : undefined,
+      amountMin: amountMinFilter.trim() ? Number(amountMinFilter.replace(',', '.')) : undefined,
+      amountMax: amountMaxFilter.trim() ? Number(amountMaxFilter.replace(',', '.')) : undefined,
+      dateExact: dateExactFilter || undefined,
+      dateFrom: dateFromFilter || undefined,
+      dateTo: dateToFilter || undefined,
+      tagIds: tagIdsFilter.length > 0 ? tagIdsFilter : undefined,
+    }),
+    [
+      labelFilter,
+      payeeFilter,
+      amountFilter,
+      amountMinFilter,
+      amountMaxFilter,
+      dateExactFilter,
+      dateFromFilter,
+      dateToFilter,
+      tagIdsFilter,
+    ],
+  )
+
+  const fetchList = useCallback(
+    (currentAccountId: number) =>
+      filtersActive
+        ? searchTransactions(currentAccountId, buildSearchFilters())
+        : getTransactions(currentAccountId, referenceDate),
+    [filtersActive, referenceDate, buildSearchFilters],
+  )
 
   useEffect(() => {
     if (accountId === null) return
     let cancelled = false
     setLoading(true)
-    getTransactions(accountId, referenceDate)
+    fetchList(accountId)
       .then((result) => {
         if (cancelled) return
         setPeriodStart(result.period_start)
@@ -69,7 +137,25 @@ function Transactions() {
     return () => {
       cancelled = true
     }
-  }, [accountId, referenceDate])
+  }, [accountId, fetchList])
+
+  function toggleTagFilter(tagId: number) {
+    setTagIdsFilter((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    )
+  }
+
+  function resetFilters() {
+    setLabelFilter('')
+    setPayeeFilter('')
+    setAmountFilter('')
+    setAmountMinFilter('')
+    setAmountMaxFilter('')
+    setDateExactFilter('')
+    setDateFromFilter('')
+    setDateToFilter('')
+    setTagIdsFilter([])
+  }
 
   // Escape ferme la confirmation-modal sans effet — n'agit que sur la modale,
   // ne navigue jamais en arrière (contrairement au raccourci Échap du
@@ -184,7 +270,7 @@ function Transactions() {
     setDeleteTarget(null)
     setDeleting(false)
     try {
-      const result = await getTransactions(accountId, referenceDate)
+      const result = await fetchList(accountId)
       setPeriodStart(result.period_start)
       setPeriodEnd(result.period_end)
       setTransactions(result.transactions)
@@ -222,29 +308,39 @@ function Transactions() {
             ))}
           </select>
 
-          <div className="flex items-center gap-2">
+          {filtersActive ? (
             <button
               type="button"
-              onClick={goToPreviousPeriod}
-              aria-label="Période précédente"
-              className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
+              onClick={resetFilters}
+              className="rounded border border-border px-3 py-2 text-body text-accent"
             >
-              ‹
+              Réinitialiser les filtres
             </button>
-            <span className="text-body text-ink">
-              {periodStart && periodEnd
-                ? `${formatDate(periodStart)} – ${formatDate(periodEnd)}`
-                : ''}
-            </span>
-            <button
-              type="button"
-              onClick={goToNextPeriod}
-              aria-label="Période suivante"
-              className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
-            >
-              ›
-            </button>
-          </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={goToPreviousPeriod}
+                aria-label="Période précédente"
+                className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
+              >
+                ‹
+              </button>
+              <span className="text-body text-ink">
+                {periodStart && periodEnd
+                  ? `${formatDate(periodStart)} – ${formatDate(periodEnd)}`
+                  : ''}
+              </span>
+              <button
+                type="button"
+                onClick={goToNextPeriod}
+                aria-label="Période suivante"
+                className="rounded border border-border px-2 py-1 text-body text-ink-muted hover:text-ink"
+              >
+                ›
+              </button>
+            </div>
+          )}
 
           <Link to="/transactions/import" className="text-body text-accent underline">
             Importer un relevé
@@ -254,10 +350,112 @@ function Transactions() {
           </Link>
         </div>
 
+        <div className="mt-3 flex flex-wrap items-end gap-3 rounded border border-border-subtle bg-surface p-3">
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Libellé
+            <input
+              type="text"
+              value={labelFilter}
+              onChange={(e) => setLabelFilter(e.target.value)}
+              className="rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Tiers
+            <input
+              type="text"
+              value={payeeFilter}
+              onChange={(e) => setPayeeFilter(e.target.value)}
+              className="rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Montant exact
+            <input
+              type="text"
+              inputMode="decimal"
+              value={amountFilter}
+              onChange={(e) => setAmountFilter(e.target.value)}
+              className="w-24 rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Montant min
+            <input
+              type="text"
+              inputMode="decimal"
+              value={amountMinFilter}
+              onChange={(e) => setAmountMinFilter(e.target.value)}
+              className="w-24 rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Montant max
+            <input
+              type="text"
+              inputMode="decimal"
+              value={amountMaxFilter}
+              onChange={(e) => setAmountMaxFilter(e.target.value)}
+              className="w-24 rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Date exacte
+            <input
+              type="date"
+              value={dateExactFilter}
+              onChange={(e) => setDateExactFilter(e.target.value)}
+              className="rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Du
+            <input
+              type="date"
+              value={dateFromFilter}
+              onChange={(e) => setDateFromFilter(e.target.value)}
+              className="rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-ink-muted">
+            Au
+            <input
+              type="date"
+              value={dateToFilter}
+              onChange={(e) => setDateToFilter(e.target.value)}
+              className="rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink"
+            />
+          </label>
+          {sortedTags.length > 0 && (
+            <div className="flex flex-col gap-1 text-caption text-ink-muted">
+              Tags
+              <div className="flex max-w-md flex-wrap gap-2">
+                {sortedTags.map((tag) => (
+                  <label
+                    key={tag.tag_id}
+                    className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-caption text-ink"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tagIdsFilter.includes(tag.tag_id)}
+                      onChange={() => toggleTagFilter(tag.tag_id)}
+                    />
+                    {tagBreadcrumb(tag, tagsById)}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {error && <p className="mt-4 text-body text-alert">{error}</p>}
 
         {!loading && !error && transactions.length === 0 && (
-          <p className="mt-6 text-body text-ink-muted">Aucune Transaction sur cette Période.</p>
+          <p className="mt-6 text-body text-ink-muted">
+            {filtersActive
+              ? 'Aucune Transaction ne correspond aux filtres.'
+              : 'Aucune Transaction sur cette Période.'}
+          </p>
         )}
 
         {transactions.length > 0 && (

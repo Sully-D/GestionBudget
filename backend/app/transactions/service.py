@@ -1,6 +1,8 @@
 from datetime import date
+from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -31,6 +33,76 @@ def list_transactions(
         .all()
     )
     return period_start, period_end, transactions
+
+
+def _contains_pattern(term: str) -> str:
+    # Échappe les caractères spéciaux LIKE (`%`, `_`) pour que la recherche
+    # "contient" reste une correspondance littérale, pas un motif joker.
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def search_transactions(
+    account_id: int,
+    *,
+    label: str | None,
+    payee: str | None,
+    amount: Decimal | None,
+    amount_min: Decimal | None,
+    amount_max: Decimal | None,
+    date_exact: date | None,
+    date_from: date | None,
+    date_to: date | None,
+    tag_ids: list[int] | None,
+    db: Session,
+) -> list[Transaction]:
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"Compte {account_id} introuvable")
+
+    query = db.query(Transaction).options(selectinload(Transaction.tags)).filter(
+        Transaction.account_id == account_id
+    )
+
+    label = label.strip() if label else None
+    payee = payee.strip() if payee else None
+    if label:
+        query = query.filter(
+            func.lower(Transaction.label).like(
+                func.lower(_contains_pattern(label)), escape="\\"
+            )
+        )
+    if payee:
+        query = query.filter(
+            func.lower(Transaction.payee).like(
+                func.lower(_contains_pattern(payee)), escape="\\"
+            )
+        )
+    if amount is not None:
+        query = query.filter(Transaction.amount == amount)
+    if amount_min is not None:
+        query = query.filter(Transaction.amount >= amount_min)
+    if amount_max is not None:
+        query = query.filter(Transaction.amount <= amount_max)
+    if date_exact is not None:
+        query = query.filter(Transaction.date == date_exact)
+    if date_from is not None:
+        query = query.filter(Transaction.date >= date_from)
+    if date_to is not None:
+        query = query.filter(Transaction.date <= date_to)
+    if tag_ids:
+        query = query.filter(
+            Transaction.transaction_id.in_(
+                select(TransactionTag.transaction_id).where(
+                    TransactionTag.tag_id.in_(tag_ids)
+                )
+            )
+        )
+
+    return (
+        query.order_by(Transaction.date.desc(), Transaction.transaction_id.desc())
+        .all()
+    )
 
 
 def create_transaction(payload: TransactionCreate, db: Session) -> Transaction:

@@ -31,8 +31,9 @@ export interface TransactionUpdatePayload {
 }
 
 export interface TransactionsList {
-  period_start: string
-  period_end: string
+  period_start: string | null
+  period_end: string | null
+  filtered: boolean
   transactions: Transaction[]
 }
 
@@ -43,6 +44,38 @@ export async function getTransactions(
   const params = new URLSearchParams({ account_id: String(accountId) })
   if (referenceDate) {
     params.set('reference_date', referenceDate)
+  }
+  const response = await fetch(`/transactions?${params.toString()}`)
+  return unwrap<TransactionsList>(response)
+}
+
+export interface TransactionSearchFilters {
+  label?: string
+  payee?: string
+  amount?: number
+  amountMin?: number
+  amountMax?: number
+  dateExact?: string
+  dateFrom?: string
+  dateTo?: string
+  tagIds?: number[]
+}
+
+export async function searchTransactions(
+  accountId: number,
+  filters: TransactionSearchFilters,
+): Promise<TransactionsList> {
+  const params = new URLSearchParams({ account_id: String(accountId) })
+  if (filters.label) params.set('label', filters.label)
+  if (filters.payee) params.set('payee', filters.payee)
+  if (filters.amount !== undefined) params.set('amount', String(filters.amount))
+  if (filters.amountMin !== undefined) params.set('amount_min', String(filters.amountMin))
+  if (filters.amountMax !== undefined) params.set('amount_max', String(filters.amountMax))
+  if (filters.dateExact) params.set('date_exact', filters.dateExact)
+  if (filters.dateFrom) params.set('date_from', filters.dateFrom)
+  if (filters.dateTo) params.set('date_to', filters.dateTo)
+  for (const tagId of filters.tagIds ?? []) {
+    params.append('tag_id', String(tagId))
   }
   const response = await fetch(`/transactions?${params.toString()}`)
   return unwrap<TransactionsList>(response)

@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -22,6 +23,7 @@ from app.transactions.service import (
     get_transaction,
     list_transactions,
     remove_tag_from_transaction,
+    search_transactions,
     update_transaction,
 )
 
@@ -52,6 +54,15 @@ def get_transactions(
     request: Request,
     account_id: int | None = Query(default=None),
     reference_date: date | None = Query(default=None),
+    label: str | None = Query(default=None),
+    payee: str | None = Query(default=None),
+    amount: Decimal | None = Query(default=None),
+    amount_min: Decimal | None = Query(default=None),
+    amount_max: Decimal | None = Query(default=None),
+    date_exact: date | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    tag_id: list[int] | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     if account_id is None:
@@ -61,6 +72,70 @@ def get_transactions(
             return FileResponse(FRONTEND_INDEX)
         raise HTTPException(status_code=422, detail="account_id: Field required")
 
+    label = label.strip() if label else None
+    payee = payee.strip() if payee else None
+    has_search_filters = any(
+        [
+            label,
+            payee,
+            amount is not None,
+            amount_min is not None,
+            amount_max is not None,
+            date_exact is not None,
+            date_from is not None,
+            date_to is not None,
+            tag_id,
+        ]
+    )
+
+    if has_search_filters:
+        if amount is not None and (amount_min is not None or amount_max is not None):
+            raise HTTPException(
+                status_code=422,
+                detail="amount ne peut pas être combiné avec amount_min/amount_max",
+            )
+        if date_exact is not None and (date_from is not None or date_to is not None):
+            raise HTTPException(
+                status_code=422,
+                detail="date_exact ne peut pas être combiné avec date_from/date_to",
+            )
+        if (
+            amount_min is not None
+            and amount_max is not None
+            and amount_min > amount_max
+        ):
+            raise HTTPException(
+                status_code=422, detail="amount_min doit être inférieur ou égal à amount_max"
+            )
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise HTTPException(
+                status_code=422, detail="date_from doit être antérieure ou égale à date_to"
+            )
+
+        transactions = search_transactions(
+            account_id,
+            label=label,
+            payee=payee,
+            amount=amount,
+            amount_min=amount_min,
+            amount_max=amount_max,
+            date_exact=date_exact,
+            date_from=date_from,
+            date_to=date_to,
+            tag_ids=tag_id,
+            db=db,
+        )
+        return {
+            "data": {
+                "period_start": None,
+                "period_end": None,
+                "filtered": True,
+                "transactions": [
+                    TransactionRead.model_validate(t) for t in transactions
+                ],
+            }
+        }
+
     period_start, period_end, transactions = list_transactions(
         account_id, reference_date, db
     )
@@ -68,6 +143,7 @@ def get_transactions(
         "data": {
             "period_start": period_start,
             "period_end": period_end,
+            "filtered": False,
             "transactions": [
                 TransactionRead.model_validate(t) for t in transactions
             ],
