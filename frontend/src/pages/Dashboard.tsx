@@ -18,6 +18,7 @@ import type { Tag } from '../api/tags'
 import { getTransactions } from '../api/transactions'
 import type { Transaction } from '../api/transactions'
 import AccountCard from '../components/AccountCard'
+import InfoTooltip from '../components/InfoTooltip'
 import {
   breadcrumbPath,
   buildSpendingRows,
@@ -31,6 +32,17 @@ import {
 
 const formFieldClass =
   'rounded border border-border bg-surface-panel px-2 py-1 text-body text-ink focus:border-accent focus:outline-none'
+
+const FORMULE_DISPONIBLE =
+  'Disponible = Revenus − Charges récurrentes − Dépenses planifiées − Dépenses courantes. ' +
+  'Les Transactions taguées « Virement Lui/Elle » sont exclues de tous les termes.'
+const FORMULE_REVENUS =
+  'Revenus = salaire de référence (ou sa correction pour cette Période, si saisie) + ' +
+  'rentrées ponctuelles saisies manuellement. Indépendant des Transactions du relevé taguées « Revenus ».'
+const FORMULE_DEPENSES_COURANTES =
+  'Montants négatifs de la Période, hors Transactions liées à un Rapprochement ou taguées ' +
+  '« Virement Lui/Elle », nettés de tout montant positif partageant un Tag (ou un Tag parent/enfant ' +
+  'du même Tag) avec une dépense.'
 
 const horizons = [1, 3, 6] as const
 type Horizon = (typeof horizons)[number]
@@ -826,7 +838,10 @@ function Dashboard() {
           {/* Mobile : hero-card autonome + grille 2x2 de kpi-cards séparée */}
           <div className="lg:hidden">
             <div className="rounded-lg bg-ink p-4 text-surface">
-              <p className="text-label uppercase text-sidebar-text-muted">Disponible</p>
+              <p className="text-label uppercase text-sidebar-text-muted">
+                Disponible
+                <InfoTooltip label="Disponible">{FORMULE_DISPONIBLE}</InfoTooltip>
+              </p>
               <p className="mt-1 font-mono text-hero-value-mobile font-bold">
                 {formatMontant(disponible.disponible)}
               </p>
@@ -834,7 +849,10 @@ function Dashboard() {
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <div className="rounded border border-border bg-surface p-3">
-                <p className="text-label uppercase text-ink-muted">Revenus</p>
+                <p className="text-label uppercase text-ink-muted">
+                  Revenus
+                  <InfoTooltip label="Revenus">{FORMULE_REVENUS}</InfoTooltip>
+                </p>
                 <p className="mt-1 font-mono text-body-strong text-ink">{formatMontant(disponible.revenus)}</p>
               </div>
               <div className="rounded border border-border bg-surface p-3">
@@ -850,7 +868,12 @@ function Dashboard() {
                 </p>
               </div>
               <div className="rounded border border-border bg-surface p-3">
-                <p className="text-label uppercase text-ink-muted">Dép. courantes</p>
+                <p className="text-label uppercase text-ink-muted">
+                  Dép. courantes
+                  <InfoTooltip label="Dépenses courantes" align="right">
+                    {FORMULE_DEPENSES_COURANTES}
+                  </InfoTooltip>
+                </p>
                 <p className="mt-1 font-mono text-body-strong text-alert">
                   {formatMontant(-disponible.depenses_courantes)}
                 </p>
@@ -861,12 +884,18 @@ function Dashboard() {
           {/* Desktop : un seul conteneur bordé, 5 cellules côte à côte */}
           <div className="hidden overflow-hidden rounded-md border border-border lg:grid lg:grid-cols-[200px_repeat(4,1fr)]">
             <div className="bg-ink p-4 text-surface">
-              <p className="text-label uppercase text-sidebar-text-muted">Disponible</p>
+              <p className="text-label uppercase text-sidebar-text-muted">
+                Disponible
+                <InfoTooltip label="Disponible">{FORMULE_DISPONIBLE}</InfoTooltip>
+              </p>
               <p className="mt-1 font-mono text-hero-value font-bold">{formatMontant(disponible.disponible)}</p>
               <p className="mt-1 text-body text-positive">{formatPourcentage(pourcentageRevenus)} des Revenus</p>
             </div>
             <div className="border-r border-border p-4">
-              <p className="text-label uppercase text-ink-muted">Revenus</p>
+              <p className="text-label uppercase text-ink-muted">
+                Revenus
+                <InfoTooltip label="Revenus">{FORMULE_REVENUS}</InfoTooltip>
+              </p>
               <p className="mt-1 font-mono text-body-strong text-ink">{formatMontant(disponible.revenus)}</p>
             </div>
             <div className="border-r border-border p-4">
@@ -882,7 +911,12 @@ function Dashboard() {
               </p>
             </div>
             <div className="p-4">
-              <p className="text-label uppercase text-ink-muted">Dép. courantes</p>
+              <p className="text-label uppercase text-ink-muted">
+                Dép. courantes
+                <InfoTooltip label="Dépenses courantes" align="right">
+                  {FORMULE_DEPENSES_COURANTES}
+                </InfoTooltip>
+              </p>
               <p className="mt-1 font-mono text-body-strong text-alert">
                 {formatMontant(-disponible.depenses_courantes)}
               </p>
