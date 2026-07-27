@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { calculerBudgetCoupleSimule, calculerDisponibleSimule, formatMontant, sortTagsByCategoryAndName } from './format'
+import {
+  calculerBudgetCoupleSimule,
+  calculerDisponibleSimule,
+  formatMontant,
+  formatSpentLabel,
+  sortTagsByCategoryAndName,
+} from './format'
 
 interface TestTag {
   tag_id: number
@@ -229,5 +235,23 @@ describe('sortTagsByCategoryAndName', () => {
     ]
     const duplicateById = new Map(duplicateNames.map((t) => [t.tag_id, t]))
     expect(sortTagsByCategoryAndName(duplicateNames, duplicateById).map((t) => t.tag_id)).toEqual([40, 41])
+  })
+})
+
+describe('formatSpentLabel', () => {
+  it('affiche un montant normal pour un net positif (dépense)', () => {
+    expect(formatSpentLabel(42)).toBe(formatMontant(42))
+  })
+
+  it('affiche un libellé "Remboursé net" pour un net négatif (remboursement > dépense)', () => {
+    expect(formatSpentLabel(-20)).toBe(`Remboursé net : ${formatMontant(20)}`)
+  })
+
+  it('affiche un montant normal (pas "Remboursé net") pour un résidu d\'arrondi flottant proche de zéro', () => {
+    expect(formatSpentLabel(-0.001)).toBe(formatMontant(-0.001))
+  })
+
+  it('affiche un montant normal pour un net exactement nul', () => {
+    expect(formatSpentLabel(0)).toBe(formatMontant(0))
   })
 })

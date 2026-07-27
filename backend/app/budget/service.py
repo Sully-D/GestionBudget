@@ -34,6 +34,13 @@ RECURRING_PERIODICITY_MONTHS: dict[str, int] = {
     "annuelle": 12,
 }
 
+# Tag réservé désignant un rééquilibrage direct entre les deux Comptes Personnels
+# (Lui <-> Elle) : exclu de toutes les composantes du Disponible (cf.
+# spec-virements-internes-depenses-courantes). Une seule constante pour éviter la
+# divergence entre les 3 usages (Charges récurrentes, Dépenses courantes, écart
+# d'équilibrage).
+RESERVED_TAG_VIREMENT_LUI_ELLE = "Virement Lui/Elle"
+
 
 def _get_account_or_404(account_id: int, db: Session) -> Account:
     account = db.get(Account, account_id)
@@ -489,6 +496,14 @@ def _is_recurring_due_in_period(
     return current <= period_end
 
 
+def _reserved_tag_ids(name: str, db: Session) -> set[int]:
+    # Lookup tolérant par nom exact, contrairement à `_get_tag_by_exact_name` (stricte,
+    # lève 422 si absent/ambigu) : ce Tag réservé est optionnel, son absence ou une
+    # éventuelle ambiguïté ne doit jamais casser le calcul du Disponible — juste
+    # signifier "rien à exclure" (cf. spec-virements-internes-depenses-courantes).
+    return {row.tag_id for row in db.query(Tag.tag_id).filter(Tag.name == name).all()}
+
+
 def _charges_recurrentes_for_period(
     account_id: int, period_start: date, period_end: date, db: Session
 ) -> Decimal:
@@ -503,10 +518,23 @@ def _charges_recurrentes_for_period(
     if not confirmed_recurring:
         return Decimal("0.00")
 
+    # Une Transaction taguée « Virement Lui/Elle » ne doit alimenter aucune composante
+    # du Disponible, y compris si elle a été rapprochée d'une Récurrente confirmée
+    # (cf. spec-virements-internes-depenses-courantes, CAP-1).
+    virement_tag_ids = _reserved_tag_ids(RESERVED_TAG_VIREMENT_LUI_ELLE, db)
+    excluded_transaction_ids: set[int] = set()
+    if virement_tag_ids:
+        excluded_transaction_ids = {
+            row.transaction_id
+            for row in db.query(TransactionTag.transaction_id)
+            .filter(TransactionTag.tag_id.in_(virement_tag_ids))
+            .all()
+        }
+
     total = Decimal("0.00")
     realized_ids: set[int] = set()
     realized_rows = (
-        db.query(RecurringMatch.recurring_id, Transaction.amount)
+        db.query(RecurringMatch.recurring_id, Transaction.amount, Transaction.transaction_id)
         .join(Transaction, Transaction.transaction_id == RecurringMatch.transaction_id)
         .join(
             RecurringTransaction,
@@ -526,8 +554,8 @@ def _charges_recurrentes_for_period(
     # §Une Récurrente compte au plus une fois par Période) : si plusieurs Transactions
     # distinctes sont confirmées contre la même Récurrente dans la Période, ne compter
     # que la première pour éviter un double comptage du même montant récurrent.
-    for recurring_id, amount in realized_rows:
-        if recurring_id in realized_ids:
+    for recurring_id, amount, transaction_id in realized_rows:
+        if recurring_id in realized_ids or transaction_id in excluded_transaction_ids:
             continue
         total += abs(amount)
         realized_ids.add(recurring_id)
@@ -537,9 +565,8 @@ def _charges_recurrentes_for_period(
     # charge projetée en plus : la Transaction reste comptée dans les Dépenses
     # courantes tant que non confirmée, ajouter la charge projetée compterait
     # la même dépense deux fois.
-    matched_ids_in_period = {
-        row.recurring_id
-        for row in db.query(RecurringMatch.recurring_id)
+    matched_ids_in_period_query = (
+        db.query(RecurringMatch.recurring_id)
         .join(Transaction, Transaction.transaction_id == RecurringMatch.transaction_id)
         .join(
             RecurringTransaction,
@@ -552,8 +579,15 @@ def _charges_recurrentes_for_period(
             Transaction.date >= period_start,
             Transaction.date <= period_end,
         )
-        .all()
-    }
+    )
+    if excluded_transaction_ids:
+        # Un Rapprochement confirmé contre une Transaction « Virement Lui/Elle » ne
+        # doit pas non plus supprimer le fallback projeté de la Récurrente : sinon
+        # elle disparaît silencieusement des deux côtés (ni réalisée, ni projetée).
+        matched_ids_in_period_query = matched_ids_in_period_query.filter(
+            Transaction.transaction_id.notin_(excluded_transaction_ids)
+        )
+    matched_ids_in_period = {row.recurring_id for row in matched_ids_in_period_query.all()}
 
     anchors = _recurring_anchor_dates_by_signature(account_id, db)
     for recurring in confirmed_recurring:
@@ -584,21 +618,77 @@ def _depenses_courantes_for_period(
         )
         .all()
     }
+    virement_tag_ids = _reserved_tag_ids(RESERVED_TAG_VIREMENT_LUI_ELLE, db)
+    virement_transaction_ids: set[int] = set()
+    if virement_tag_ids:
+        virement_transaction_ids = {
+            row.transaction_id
+            for row in db.query(TransactionTag.transaction_id)
+            .filter(TransactionTag.tag_id.in_(virement_tag_ids))
+            .all()
+        }
+    excluded_transaction_ids = matched_transaction_ids | virement_transaction_ids
 
-    transactions = (
-        db.query(Transaction)
-        .filter(
-            Transaction.account_id == account_id,
-            Transaction.date >= period_start,
-            Transaction.date <= period_end,
-            Transaction.amount < 0,
+    period_transactions_query = db.query(Transaction).filter(
+        Transaction.account_id == account_id,
+        Transaction.date >= period_start,
+        Transaction.date <= period_end,
+    )
+    if excluded_transaction_ids:
+        period_transactions_query = period_transactions_query.filter(
+            Transaction.transaction_id.notin_(excluded_transaction_ids)
         )
-        .all()
-    )
-    return sum(
-        (abs(t.amount) for t in transactions if t.transaction_id not in matched_transaction_ids),
-        Decimal("0.00"),
-    )
+    period_transactions = period_transactions_query.all()
+
+    transaction_tag_ids: dict[int, set[int]] = {}
+    if period_transactions:
+        transaction_ids = [t.transaction_id for t in period_transactions]
+        for row in (
+            db.query(TransactionTag.transaction_id, TransactionTag.tag_id)
+            .filter(TransactionTag.transaction_id.in_(transaction_ids))
+            .all()
+        ):
+            transaction_tag_ids.setdefault(row.transaction_id, set()).add(row.tag_id)
+
+    # Rollup ancêtre (même logique que `_amount_by_tag_for_period`), utilisé
+    # uniquement pour décider QUELS remboursements se rapportent à la Période — le
+    # montant, lui, est TOUJOURS compté une seule fois par Transaction unique
+    # (jamais par tag) : un Tag n'est pas une partition (FR-13, tags multiples), une
+    # dépense taguée sous deux tags racines distincts ne doit pas être comptée deux
+    # fois (spec-virements-internes-depenses-courantes, CAP-2 — cf. Spec Change Log
+    # itération 2).
+    all_tag_ids = {tag_id for tags in transaction_tag_ids.values() for tag_id in tags}
+    ancestors_or_self: dict[int, set[int]] = {}
+    if all_tag_ids:
+        tag_by_id = {tag.tag_id: tag for tag in db.query(Tag).all()}
+        for tag_id in all_tag_ids:
+            chain: set[int] = set()
+            current: Tag | None = tag_by_id.get(tag_id)
+            while current is not None:
+                chain.add(current.tag_id)
+                current = tag_by_id.get(current.parent_id) if current.parent_id is not None else None
+            ancestors_or_self[tag_id] = chain
+
+    def _rolled_up_tags(transaction_id: int) -> set[int]:
+        result: set[int] = set()
+        for tag_id in transaction_tag_ids.get(transaction_id, ()):
+            result.update(ancestors_or_self.get(tag_id, {tag_id}))
+        return result
+
+    eligible_expenses = [t for t in period_transactions if t.amount < 0]
+    gross = sum((abs(t.amount) for t in eligible_expenses), Decimal("0.00"))
+
+    expense_tag_ids: set[int] = set()
+    for t in eligible_expenses:
+        expense_tag_ids.update(_rolled_up_tags(t.transaction_id))
+
+    reimbursements = Decimal("0.00")
+    if expense_tag_ids:
+        for t in period_transactions:
+            if t.amount > 0 and _rolled_up_tags(t.transaction_id) & expense_tag_ids:
+                reimbursements += t.amount
+
+    return gross - reimbursements
 
 
 def _depenses_planifiees_for_period(
@@ -617,15 +707,63 @@ def _depenses_planifiees_for_period(
     return abs(total)
 
 
+def _virement_lui_elle_ecart_for_period(
+    period_start: date, period_end: date, db: Session
+) -> Decimal:
+    # Somme signée des Transactions « Virement Lui/Elle » sur tous les Comptes
+    # Personnels : doit être ~0 si chaque virement a bien sa contrepartie taguée sur
+    # l'autre Compte (cf. spec-virements-internes-depenses-courantes, CAP-3).
+    virement_tag_ids = _reserved_tag_ids(RESERVED_TAG_VIREMENT_LUI_ELLE, db)
+    if not virement_tag_ids:
+        return Decimal("0.00")
+
+    personal_account_ids = {
+        row.account_id
+        for row in db.query(Account.account_id).filter(Account.is_common.is_(False)).all()
+    }
+    if not personal_account_ids:
+        return Decimal("0.00")
+
+    rows = (
+        db.query(Transaction.transaction_id, Transaction.amount)
+        .join(TransactionTag, TransactionTag.transaction_id == Transaction.transaction_id)
+        .filter(
+            Transaction.account_id.in_(personal_account_ids),
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+            TransactionTag.tag_id.in_(virement_tag_ids),
+        )
+        .all()
+    )
+    seen: set[int] = set()
+    total = Decimal("0.00")
+    for transaction_id, amount in rows:
+        if transaction_id in seen:
+            continue
+        seen.add(transaction_id)
+        total += amount
+    return total
+
+
 def get_disponible(account_id: int, period_start: date, db: Session) -> DisponibleRead:
     account = _get_personal_account_or_404(account_id, db)
     period_start, period_end = period_for(account.start_day, period_start)
+    is_current_period = period_start == compute_period(account, date.today())[0]
 
     revenus = get_period_summary(account_id, period_start, db).total
     charges_recurrentes = _charges_recurrentes_for_period(account_id, period_start, period_end, db)
     depenses_planifiees = _depenses_planifiees_for_period(account_id, period_start, period_end, db)
     depenses_courantes = _depenses_courantes_for_period(account_id, period_start, period_end, db)
     disponible = revenus - charges_recurrentes - depenses_planifiees - depenses_courantes
+
+    # Contrôle d'équilibrage limité à la Période en cours (cf. get_tag_tracking) :
+    # un Reste passé est clos, un déséquilibre qui y apparaîtrait ne serait plus
+    # actionnable pour l'utilisateur.
+    virement_lui_elle_ecart = (
+        _virement_lui_elle_ecart_for_period(period_start, period_end, db)
+        if is_current_period
+        else None
+    )
 
     return DisponibleRead(
         account_id=account_id,
@@ -636,6 +774,7 @@ def get_disponible(account_id: int, period_start: date, db: Session) -> Disponib
         depenses_planifiees=depenses_planifiees,
         depenses_courantes=depenses_courantes,
         disponible=disponible,
+        virement_lui_elle_ecart=virement_lui_elle_ecart,
     )
 
 

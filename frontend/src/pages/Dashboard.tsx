@@ -24,6 +24,7 @@ import {
   formatDate,
   formatMontant,
   formatPourcentage,
+  formatSpentLabel,
   shiftDate,
   tagBreadcrumb,
 } from '../lib/format'
@@ -809,6 +810,17 @@ function Dashboard() {
         <p className="px-4 py-8 text-center text-body text-ink-muted">Chargement…</p>
       )}
 
+      {selectedAccount &&
+        !selectedAccount.is_common &&
+        disponible &&
+        disponible.virement_lui_elle_ecart !== null &&
+        Math.abs(disponible.virement_lui_elle_ecart) >= 0.01 && (
+          <p className="mb-3 rounded border border-alert bg-alert-bg px-3 py-2 text-body text-alert">
+            Virements Lui/Elle non équilibrés sur cette Période :{' '}
+            {formatMontant(Math.abs(disponible.virement_lui_elle_ecart))}
+          </p>
+        )}
+
       {selectedAccount && !selectedAccount.is_common && disponible && (
         <>
           {/* Mobile : hero-card autonome + grille 2x2 de kpi-cards séparée */}
@@ -911,11 +923,11 @@ function Dashboard() {
                     <tr
                       key={row.tag_id}
                       className={`border-t border-border-subtle ${status === 'over' ? 'bg-alert-bg' : ''}`}
-                      aria-label={status ? `${label}, ${formatMontant(row.spent)}, ${statusEtat(status, ratio)}` : undefined}
+                      aria-label={status ? `${label}, ${formatSpentLabel(row.spent)}, ${statusEtat(status, ratio)}` : undefined}
                     >
                       <td className="px-2 py-2 text-body text-ink">{label}</td>
                       <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
-                        {formatMontant(row.spent)}
+                        {formatSpentLabel(row.spent)}
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-body text-ink-muted">
                         {pctRevenus !== null ? formatPourcentage(pctRevenus) : '—'}
@@ -966,11 +978,11 @@ function Dashboard() {
                   <div
                     key={row.tag_id}
                     className={`rounded border border-border bg-surface p-3 ${status === 'over' ? 'bg-alert-bg' : ''}`}
-                    aria-label={status ? `${label}, ${formatMontant(row.spent)}, ${statusEtat(status, ratio)}` : undefined}
+                    aria-label={status ? `${label}, ${formatSpentLabel(row.spent)}, ${statusEtat(status, ratio)}` : undefined}
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-body text-ink">{label}</span>
-                      <span className="font-mono text-body-strong text-ink">{formatMontant(row.spent)}</span>
+                      <span className="font-mono text-body-strong text-ink">{formatSpentLabel(row.spent)}</span>
                     </div>
                     <div className="mt-1 text-caption text-ink-muted">
                       {pctRevenus !== null ? formatPourcentage(pctRevenus) : '—'} des Revenus
@@ -1202,7 +1214,7 @@ function Dashboard() {
                     <tr key={row.tag_id} className="border-t border-border-subtle">
                       <td className="px-2 py-2 text-body text-ink">{label}</td>
                       <td className="px-2 py-2 text-right font-mono text-body-strong text-ink">
-                        {formatMontant(row.spent)}
+                        {formatSpentLabel(row.spent)}
                       </td>
                     </tr>
                   ))}
@@ -1216,7 +1228,7 @@ function Dashboard() {
                     className="flex items-center justify-between rounded border border-border bg-surface p-3"
                   >
                     <span className="text-body text-ink">{label}</span>
-                    <span className="font-mono text-body-strong text-ink">{formatMontant(row.spent)}</span>
+                    <span className="font-mono text-body-strong text-ink">{formatSpentLabel(row.spent)}</span>
                   </div>
                 ))}
               </div>

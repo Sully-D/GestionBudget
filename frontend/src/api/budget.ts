@@ -112,6 +112,9 @@ export interface Disponible {
   depenses_planifiees: number
   depenses_courantes: number
   disponible: number
+  // null hors Période en cours — le contrôle d'équilibrage Lui/Elle ne concerne
+  // que la Période active (cf. backend `get_disponible`).
+  virement_lui_elle_ecart: number | null
 }
 
 export async function getDisponible(accountId: number, periodStart: string): Promise<Disponible> {

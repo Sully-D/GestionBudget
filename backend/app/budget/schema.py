@@ -5,6 +5,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
+def _optional_decimal_to_float(value: Decimal | None) -> float | None:
+    return None if value is None else float(value)
+
+
 class RevenueSalaireUpsert(BaseModel):
     account_id: int
     period_start: date | None = None
@@ -213,6 +217,9 @@ class DisponibleRead(BaseModel):
     depenses_planifiees: Decimal
     depenses_courantes: Decimal
     disponible: Decimal
+    # None hors Période en cours (cf. get_disponible) : un déséquilibre passé n'est
+    # plus actionnable, seule la Période en cours affiche ce contrôle.
+    virement_lui_elle_ecart: Decimal | None = None
 
     @field_serializer(
         "revenus",
@@ -224,3 +231,7 @@ class DisponibleRead(BaseModel):
     )
     def _serialize_decimal(self, value: Decimal) -> float:
         return float(value)
+
+    @field_serializer("virement_lui_elle_ecart", when_used="json")
+    def _serialize_virement_lui_elle_ecart(self, value: Decimal | None) -> float | None:
+        return _optional_decimal_to_float(value)

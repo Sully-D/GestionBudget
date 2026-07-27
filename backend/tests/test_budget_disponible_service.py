@@ -13,7 +13,7 @@ from app.budget.service import get_disponible, upsert_salaire
 from app.core.db import Base
 from app.projections.model import PlannedExpense, RecurringMatch, RecurringTransaction
 from app.tags.model import Tag
-from app.transactions.model import Transaction
+from app.transactions.model import Transaction, TransactionTag
 
 PERIOD_START = date(2026, 3, 1)
 PERIOD_END = date(2026, 3, 31)
@@ -103,6 +103,17 @@ def _add_planned_expense(
     db.commit()
     db.refresh(planned_expense)
     return planned_expense
+
+
+def _add_transaction_tagged(db, account, tx_date, amount, tag, label="Dépense") -> Transaction:
+    tx = _add_transaction(db, account, tx_date, amount, label=label)
+    db.add(TransactionTag(transaction_id=tx.transaction_id, tag_id=tag.tag_id))
+    db.commit()
+    return tx
+
+
+def _current_period_start(today: date) -> date:
+    return date(today.year, today.month, 1)
 
 
 def _set_revenu(db, account, amount) -> None:
@@ -288,3 +299,190 @@ def test_unknown_account_returns_404(db):
     with pytest.raises(HTTPException) as exc_info:
         get_disponible(999, PERIOD_START, db)
     assert exc_info.value.status_code == 404
+
+
+def test_virement_lui_elle_taggue_exclu_des_depenses_courantes(db):
+    account = _add_account(db)
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 10), Decimal("-600.00"), virement_tag)
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.depenses_courantes == Decimal("0.00")
+    assert result.disponible == Decimal("1000.00")
+
+
+def test_virement_lui_elle_taggue_exclu_des_charges_recurrentes(db):
+    account = _add_account(db)
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    _set_revenu(db, account, Decimal("1000.00"))
+    recurring = _add_recurring(db, account, signature="virement mensuel", amount=Decimal("-600.00"))
+    tx = _add_transaction(db, account, date(2026, 3, 10), Decimal("-600.00"), label="Virement mensuel")
+    db.add(TransactionTag(transaction_id=tx.transaction_id, tag_id=virement_tag.tag_id))
+    db.commit()
+    _add_match(db, recurring, tx, status="confirmed")
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.charges_recurrentes == Decimal("0.00")
+    assert result.disponible == Decimal("1000.00")
+
+
+def test_remboursement_partage_entre_deux_tags_deduit_une_seule_fois_du_total(db):
+    # Un Tag n'est pas une partition (FR-13, tags multiples) : le remboursement de
+    # 30€ est UNE seule Transaction, elle ne doit être déduite qu'une fois du total
+    # global (100€ de dépenses - 30€ = 70€), même si elle est taguée sous deux Tags
+    # racines distincts. La déduire par tag (20€ + 20€ = 40€) compterait à tort les
+    # mêmes 30€ réels deux fois (spec-virements-internes-depenses-courantes, CAP-2).
+    account = _add_account(db)
+    sante = _add_tag(db, name="Santé")
+    loisirs = _add_tag(db, name="Loisirs")
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 5), Decimal("-50.00"), sante)
+    _add_transaction_tagged(db, account, date(2026, 3, 6), Decimal("-50.00"), loisirs)
+    remboursement = _add_transaction(db, account, date(2026, 3, 7), Decimal("30.00"), label="Remboursement")
+    db.add(TransactionTag(transaction_id=remboursement.transaction_id, tag_id=sante.tag_id))
+    db.add(TransactionTag(transaction_id=remboursement.transaction_id, tag_id=loisirs.tag_id))
+    db.commit()
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.depenses_courantes == Decimal("70.00")
+
+
+def test_depense_unique_taguee_avec_deux_tags_racines_distincts_nest_comptee_quune_fois(db):
+    # Bug confirmé par 2 reviewers indépendants (Blind Hunter + Edge Case Hunter,
+    # itération 2) : une seule Transaction de -50€ taguée à la fois « Santé » et
+    # « Loisirs » (FR-13, tags multiples) ne représente qu'une seule dépense réelle.
+    account = _add_account(db)
+    sante = _add_tag(db, name="Santé")
+    loisirs = _add_tag(db, name="Loisirs")
+    _set_revenu(db, account, Decimal("1000.00"))
+    depense = _add_transaction(db, account, date(2026, 3, 5), Decimal("-50.00"), label="Dépense mixte")
+    db.add(TransactionTag(transaction_id=depense.transaction_id, tag_id=sante.tag_id))
+    db.add(TransactionTag(transaction_id=depense.transaction_id, tag_id=loisirs.tag_id))
+    db.commit()
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.depenses_courantes == Decimal("50.00")
+    assert result.disponible == Decimal("950.00")
+
+
+def test_virement_lui_elle_equilibre_sur_periode_en_cours_ecart_nul(db):
+    today = date.today()
+    period_start = _current_period_start(today)
+    lui = _add_account(db, name="Personnel-Lui")
+    elle = _add_account(db, is_common=False, name="Personnel-Elle")
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    _set_revenu(db, lui, Decimal("1000.00"))
+    _add_transaction_tagged(db, lui, today, Decimal("-600.00"), virement_tag)
+    _add_transaction_tagged(db, elle, today, Decimal("600.00"), virement_tag)
+
+    result = get_disponible(lui.account_id, period_start, db)
+
+    assert result.virement_lui_elle_ecart == Decimal("0.00")
+    assert result.depenses_courantes == Decimal("0.00")
+
+
+def test_virement_lui_elle_desequilibre_sur_periode_en_cours_ecart_signale(db):
+    today = date.today()
+    period_start = _current_period_start(today)
+    lui = _add_account(db, name="Personnel-Lui")
+    _add_account(db, is_common=False, name="Personnel-Elle")
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    _set_revenu(db, lui, Decimal("1000.00"))
+    _add_transaction_tagged(db, lui, today, Decimal("-600.00"), virement_tag)
+
+    result = get_disponible(lui.account_id, period_start, db)
+
+    assert result.virement_lui_elle_ecart == Decimal("-600.00")
+
+
+def test_virement_lui_elle_sur_periode_passee_aucun_controle(db):
+    account = _add_account(db)
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 10), Decimal("-600.00"), virement_tag)
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.virement_lui_elle_ecart is None
+
+
+def test_tag_virement_lui_elle_absent_ne_leve_pas_derreur(db):
+    today = date.today()
+    period_start = _current_period_start(today)
+    account = _add_account(db)
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction(db, account, today, Decimal("-42.00"))
+
+    result = get_disponible(account.account_id, period_start, db)
+
+    assert result.virement_lui_elle_ecart == Decimal("0.00")
+    assert result.depenses_courantes == Decimal("42.00")
+
+
+def test_depenses_courantes_reproductible_avec_hierarchie_de_tags(db):
+    # Charges (racine) est plafond/rollup de Charges > Fixes (cf. FR-16/AD-9) : un
+    # remboursement tagué directement sur le parent ne doit netter QUE le parent, la
+    # dépense taguée sur l'enfant reste pleine dans son propre total. Seule la somme
+    # des Tags RACINES doit être reproductible dans le total global Dépenses courantes
+    # (spec-virements-internes-depenses-courantes, CAP-2).
+    account = _add_account(db)
+    charges = _add_tag(db, name="Charges")
+    fixes = Tag(name="Charges > Fixes", parent_id=charges.tag_id, level=2)
+    db.add(fixes)
+    db.commit()
+    db.refresh(fixes)
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 5), Decimal("-100.00"), fixes)
+    remboursement = _add_transaction(db, account, date(2026, 3, 6), Decimal("40.00"), label="Remboursement")
+    db.add(TransactionTag(transaction_id=remboursement.transaction_id, tag_id=charges.tag_id))
+    db.commit()
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    # Charges (racine, via rollup de Fixes) : 100 - 40 = 60€ ; Fixes (non racine,
+    # déjà inclus dans Charges via rollup) n'est pas resommé séparément.
+    assert result.depenses_courantes == Decimal("60.00")
+
+
+def test_positif_taggue_virement_lui_elle_et_tag_de_depense_nest_pas_compte_en_remboursement(db):
+    # Bug confirmé par 2 reviewers indépendants (Blind Hunter + Edge Case Hunter) :
+    # une Transaction positive taguée à la fois « Virement Lui/Elle » et un Tag de
+    # dépense doit rester totalement exclue (CAP-1, "quel que soit son signe"), pas
+    # comptée comme remboursement du Tag de dépense qu'elle partage aussi.
+    account = _add_account(db)
+    virement_tag = _add_tag(db, name="Virement Lui/Elle")
+    loisirs = _add_tag(db, name="Loisirs")
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 5), Decimal("-50.00"), loisirs)
+    ambigu = _add_transaction(db, account, date(2026, 3, 6), Decimal("50.00"), label="Virement + Loisirs ?")
+    db.add(TransactionTag(transaction_id=ambigu.transaction_id, tag_id=virement_tag.tag_id))
+    db.add(TransactionTag(transaction_id=ambigu.transaction_id, tag_id=loisirs.tag_id))
+    db.commit()
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.depenses_courantes == Decimal("50.00")
+
+
+def test_positif_deja_rapproche_dune_recurrente_nest_pas_compte_en_remboursement(db):
+    # Edge case signalé par l'Edge Case Hunter : une Transaction positive déjà liée à
+    # un RecurringMatch confirmé (donc déjà comptée, le cas échéant, dans Charges
+    # récurrentes) ne doit pas en plus netter une dépense courante du même Tag.
+    account = _add_account(db)
+    loisirs = _add_tag(db, name="Loisirs")
+    _set_revenu(db, account, Decimal("1000.00"))
+    _add_transaction_tagged(db, account, date(2026, 3, 5), Decimal("-50.00"), loisirs)
+    recurring = _add_recurring(db, account, signature="rentrée récurrente", amount=Decimal("50.00"))
+    matched = _add_transaction(db, account, date(2026, 3, 6), Decimal("50.00"), label="Rentrée")
+    db.add(TransactionTag(transaction_id=matched.transaction_id, tag_id=loisirs.tag_id))
+    db.commit()
+    _add_match(db, recurring, matched, status="confirmed")
+
+    result = get_disponible(account.account_id, PERIOD_START, db)
+
+    assert result.depenses_courantes == Decimal("50.00")

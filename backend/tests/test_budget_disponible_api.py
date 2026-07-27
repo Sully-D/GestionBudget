@@ -82,6 +82,7 @@ def test_get_disponible_returns_data_envelope(client):
     assert data["depenses_planifiees"] == 0.0
     assert data["depenses_courantes"] == 42.0
     assert data["disponible"] == 958.0
+    assert data["virement_lui_elle_ecart"] is None
 
 
 def test_get_disponible_on_common_account_returns_422(client):
@@ -102,3 +103,23 @@ def test_get_disponible_unknown_account_returns_404(client):
     )
     assert response.status_code == 404
     assert isinstance(response.json()["detail"], str)
+
+
+def test_get_disponible_virement_lui_elle_ecart_exposed_on_current_period(client):
+    test_client, state = client
+    today = date.today()
+
+    response = test_client.get(
+        "/disponible",
+        params={
+            "account_id": state["personal_id"],
+            "period_start": date(today.year, today.month, 1).isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    # Pas de Tag « Virement Lui/Elle » créé dans ce fixture : lookup tolérant,
+    # écart 0.00 exposé (float) sur la Période en cours, jamais une erreur.
+    assert data["virement_lui_elle_ecart"] == 0.0
+    assert isinstance(data["virement_lui_elle_ecart"], float)

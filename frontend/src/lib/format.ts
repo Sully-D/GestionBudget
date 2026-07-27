@@ -15,6 +15,15 @@ export function formatMontant(value: number): string {
 
 // `value` est déjà exprimée en 0-100 (pas une fraction 0-1) : pas de style
 // `percent` natif d'Intl ici, un simple NumberFormat décimal + suffixe " %".
+// Un net négatif (remboursements > dépenses sur un Tag, netting sans plancher
+// depuis 2026-07-17) n'est pas une "dépense négative" lisible : distingue le
+// libellé plutôt que d'afficher un montant "Dépensé" trompeur.
+export function formatSpentLabel(spent: number): string {
+  // Épsilon sous le centime : un résidu d'arrondi flottant (-0.001) ne doit pas
+  // déclencher le libellé "Remboursé net" pour un montant qui vaut 0,00 € affiché.
+  return spent < -0.005 ? `Remboursé net : ${formatMontant(Math.abs(spent))}` : formatMontant(spent)
+}
+
 export function formatPourcentage(value: number): string {
   return `${new Intl.NumberFormat('fr-FR', {
     minimumFractionDigits: 1,
